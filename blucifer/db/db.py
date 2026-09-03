@@ -484,6 +484,33 @@ async def prune_sightings(older_than: str) -> int:
         await conn.commit()
         return cur.rowcount
 
+async def list_sensors() -> list[dict]:
+    """Rollup of every sensor that has ever reported a sighting."""
+    async with _connect() as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            "SELECT sensor_id, COUNT(*) sightings, COUNT(DISTINCT mac) devices, "
+            "       MAX(ts) last_seen "
+            "FROM sightings GROUP BY sensor_id"
+        ) as cur:
+            rows = await cur.fetchall()
+    return [
+        {"sensor_id": r["sensor_id"] or "unknown", "sightings": r["sightings"],
+         "devices": r["devices"], "last_seen": r["last_seen"]}
+        for r in rows
+    ]
+
+async def latest_sensor_by_mac() -> dict[str, str | None]:
+    """The sensor that most recently reported each device."""
+    async with _connect() as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            "SELECT s.mac, s.sensor_id FROM sightings s "
+            "JOIN (SELECT mac, MAX(id) mid FROM sightings GROUP BY mac) m ON s.id = m.mid"
+        ) as cur:
+            rows = await cur.fetchall()
+    return {r["mac"]: r["sensor_id"] for r in rows}
+
 async def list_devices(
     limit: int = 1000,
     include_ignored: bool = False,

@@ -46,6 +46,9 @@
   ul.filters li.active { color: var(--text-bright); border-left-color: var(--red); background: var(--panel); }
   ul.filters li .c { color: var(--text-dim); }
   ul.filters li.zero { opacity: .4; }
+  ul.filters li .sdot { display: inline-block; width: .5em; height: .5em; border-radius: 50%;
+    background: var(--text-dim); margin-right: .45em; vertical-align: middle; }
+  ul.filters li .sdot.on { background: var(--green); box-shadow: 0 0 5px var(--green); }
 
   .toolbar { display: flex; gap: .75rem; margin-bottom: 1rem; }
   .toolbar input { flex: 1; }
@@ -146,6 +149,10 @@
       <ul class="filters" id="groups"></ul>
     </section>
     <section>
+      <h3 class="label">Sensors</h3>
+      <ul class="filters" id="sensors"></ul>
+    </section>
+    <section>
       <h3 class="label">Date Range</h3>
       <input type="datetime-local" id="datefrom" aria-label="Seen from">
       <input type="datetime-local" id="dateto" aria-label="Seen until">
@@ -183,7 +190,8 @@
               <th class="check"><input type="checkbox" id="selectall" aria-label="Select all"></th>
               <th class="star" aria-label="Watched"></th>
               <th>Class</th><th>Address</th><th>Vendor</th><th class="name">Name</th>
-              <th class="num">RSSI</th><th class="num">Sightings</th><th>Last seen</th><th>Group</th>
+              <th class="num">RSSI</th><th class="num">Sightings</th><th>Last seen</th>
+              <th>Sensor</th><th>Group</th>
             </tr>
           </thead>
           <tbody id="rows"></tbody>
@@ -223,6 +231,7 @@
   const newThisSession = new Set();   // macs first seen while this page is open
   const recentNew = new Map();        // mac -> timestamp, for the row flash
   const selected = new Set();         // macs currently checked
+  let sensors = [];                   // from /api/sensors
   let activeFilter = "all";
   let term = "";
   let dateFrom = null;                // epoch ms, or null
@@ -288,11 +297,12 @@
     const f = activeFilter;
     if (f === "watched") { if (!dev.watched) return false; }
     else if (f.startsWith("group:")) { if ((dev.group_name || "") !== f.slice(6)) return false; }
+    else if (f.startsWith("sensor:")) { if ((dev.last_sensor || "") !== f.slice(7)) return false; }
     else if (f === "unknown") { if (classKey(dev) !== "unknown") return false; }
     else if (f !== "all") { if (classKey(dev) !== f) return false; }
 
     if (term) {
-      const hay = `${dev.mac} ${dev.vendor || ""} ${dev.friendly_name || ""} ${dev.class_label || ""} ${dev.group_name || ""}`.toLowerCase();
+      const hay = `${dev.mac} ${dev.vendor || ""} ${dev.friendly_name || ""} ${dev.class_label || ""} ${dev.group_name || ""} ${dev.last_sensor || ""}`.toLowerCase();
       if (!hay.includes(term)) return false;
     }
     return true;
@@ -328,6 +338,7 @@
           `<td class="num">${dev.rssi ?? ""}</td>` +
           `<td class="num sightings">${dev.total_sightings ?? ""}</td>` +
           `<td class="seen${rt.now ? " now" : ""}">${rt.text}</td>` +
+          `<td class="group ${dev.last_sensor ? "" : "none"}">${dev.last_sensor ? esc(dev.last_sensor) : "—"}</td>` +
           `<td class="group ${dev.group_name ? "" : "none"}">${dev.group_name ? esc(dev.group_name) : "—"}</td>` +
         `</tr>`
       );
@@ -380,6 +391,19 @@
     groupListEl.innerHTML = groupNames().map((g) => `<option value="${esc(g)}">`).join("");
   }
 
+  function renderSensors() {
+    const el = document.getElementById("sensors");
+    if (!sensors.length) { el.innerHTML = `<li class="zero"><span>none yet</span></li>`; return; }
+    el.innerHTML = sensors.map((s) => {
+      const key = "sensor:" + s.sensor_id;
+      const active = activeFilter === key ? "active" : "";
+      const dot = `<span class="sdot ${s.live ? "on" : ""}"></span>`;
+      const title = s.age_s != null ? `last ingest ${s.age_s}s ago` : "no ingest this session";
+      return `<li class="${active}" data-filter="${esc(key)}" title="${esc(title)}">` +
+             `<span>${dot}${esc(s.sensor_id)}</span><span class="c">${s.devices}</span></li>`;
+    }).join("");
+  }
+
   function renderSelbar() {
     selbarEl.hidden = selected.size === 0;
     selcountEl.textContent = `${selected.size} selected`;
@@ -390,7 +414,15 @@
     renderStats();
     renderFilters();
     renderGroups();
+    renderSensors();
     renderSelbar();
+  }
+
+  function loadSensors() {
+    fetch("/api/sensors")
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+      .then((data) => { sensors = data.sensors || []; renderSensors(); })
+      .catch(() => {});
   }
 
   function upsert(dev, isNew) {
@@ -446,7 +478,8 @@
 
   function exportCsv() {
     const cols = ["mac", "address_type", "bt_type", "class_label", "vendor", "friendly_name",
-                  "rssi", "total_sightings", "group_name", "watched", "first_seen", "last_seen"];
+                  "rssi", "total_sightings", "last_sensor", "group_name", "watched",
+                  "first_seen", "last_seen"];
     const lines = [cols.join(",")];
     for (const d of currentList()) lines.push(cols.map((c) => csvCell(d[c])).join(","));
     const blob = new Blob([lines.join("\n")], { type: "text/csv" });
@@ -534,6 +567,8 @@
   tickClock();
   setInterval(tickClock, 1000);
   setInterval(render, 2000);  // keep relative times / active count fresh
+  setInterval(loadSensors, 15000);
+  loadSensors();
 
   fetch("/api/devices")
     .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))

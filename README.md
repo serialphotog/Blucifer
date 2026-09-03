@@ -45,9 +45,29 @@ secret so the sensor can authenticate to the web node:
 # on the web host
 blucifer web --host 0.0.0.0 --ingest-token "$(openssl rand -hex 16)"
 
-# on the sensor host
-blucifer scan --server-url http://ui-host:8080 --ingest-token <same-token>
+# on each sensor host — name it so you can tell rooms apart in the UI
+blucifer scan --server-url http://ui-host:8080 --ingest-token <same-token> \
+              --sensor-name living-room
 ```
+
+## Configuration
+
+Blucifer exposes a number of environment variables that allow you to override the defaults. The following configuration environment variables are available:
+
+| Variable                 | Description                                         | Default Value          |
+|--------------------------|-----------------------------------------------------|------------------------|
+| `BLUCIFER_DATA_DIR`      | The directory where Blucifer stores all of its data | `~/.local/share/blucifer/` |
+| `BLUCIFER_DB_PATH`       | The path at which Blucifer stores its database      | `$BLUCIFER_DATA_DIR/blucifer.db` |
+| `BLUCIFER_WEB_HOST`      | The host string for the Blucifer web UI             | `127.0.0.1`            |
+| `BLUCIFER_WEB_PORT`      | The port on which the web interface runs            | `8080`                 |
+| `BLUCIFER_SIGHTINGS_RETENTION_DAYS` | The number of days to retain sighting information (can be overridden in the web interface) | `30` |
+| `BLUCIFER_SENSOR_NAME`   | The name of the sensor to show in the UI            | The sensor's hostname |
+| `BLUCIFER_SERVER_URL`   | The URL for the Blucifer server that the sensor sends observations to. | None |
+| `BLUCIFER_INGEST_TOKEN`  | Shared secret for POST requests to the server. | None |
+| `BLUCIFER_SPOOL_PATH` | The on-disk queue for unsent scan results that need to be sent to the server. | `$BLUCIFER_DATA_DIR/spool.db` |
+| `BLUCIFER_SPOOL_MAX_BATCHES` | The max number of batches to use for the on-disk spool queue. | `5000` |
+| `BLUCIFER_ADAPTER` | The adapter to use for BLE scanning. | None |
+| `BLUCIFER_CLASSIC_ADAPTER` | The adapter to use for classic Bluetooth scanning. | None |
 
 # Credits
 

@@ -16,6 +16,7 @@ from blucifer.bluetooth.utils import list_adapters
 from blucifer.config.config import (
     INGEST_TOKEN,
     SCAN_INTERVAL_SECONDS,
+    SENSOR_NAME,
     SERVER_URL,
     SPOOL_MAX_BATCHES,
     SPOOL_PATH,
@@ -55,7 +56,9 @@ async def _run_scan(args: argparse.Namespace) -> None:
     from blucifer.spool import Spool
 
     spool = Spool(SPOOL_PATH, max_batches=SPOOL_MAX_BATCHES)
-    client = HttpIngestClient(args.server_url, args.ingest_token, spool)
+    client = HttpIngestClient(args.server_url, args.ingest_token, spool,
+                              sensor_name=args.sensor_name)
+    logger.info("Sensor identity: %s", args.sensor_name)
     daemon = BluciferDaemon(
         adapter=args.adapter,
         classic_adapter=args.classic_adapter,
@@ -93,6 +96,8 @@ def main() -> None:
                       help="Base URL of the web node (e.g. http://ui-host:8080).")
     scan.add_argument("--ingest-token", default=INGEST_TOKEN,
                       help="Shared secret for the web node's /api/ingest.")
+    scan.add_argument("--sensor-name", default=SENSOR_NAME,
+                      help=f"How this sensor is labelled in the UI (default {SENSOR_NAME!r}).")
     scan.add_argument("-a", "--adapter",
                       help="Bluetooth adapter for BLE scanning (e.g. hci0).")
     scan.add_argument("--classic-adapter",

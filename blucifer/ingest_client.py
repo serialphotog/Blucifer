@@ -22,9 +22,11 @@ class HttpIngestClient:
     just leaves batches queued for the next scan cycle.
     """
 
-    def __init__(self, server_url: str, token: str | None, spool: Spool):
+    def __init__(self, server_url: str, token: str | None, spool: Spool,
+                 sensor_name: str | None = None):
         self._url = server_url.rstrip("/") + "/api/ingest"
         self._headers = {"Authorization": f"Bearer {token}"} if token else {}
+        self._sensor_name = (sensor_name or "").strip()[:64] or None
         self._spool = spool
         self._session: aiohttp.ClientSession | None = None
 
@@ -51,9 +53,12 @@ class HttpIngestClient:
 
     async def _post_batch(self, wire_devices: list[dict]) -> bool:
         assert self._session is not None, "HttpIngestClient.start() not called"
+        payload: dict = {"devices": wire_devices}
+        if self._sensor_name:
+            payload["sensor"] = self._sensor_name
         try:
             async with self._session.post(
-                self._url, json={"devices": wire_devices}, headers=self._headers
+                self._url, json=payload, headers=self._headers
             ) as resp:
                 if resp.status == 200:
                     return True

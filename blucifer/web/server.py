@@ -90,6 +90,8 @@ class WebServer:
         self._device_subscribers: set[asyncio.Queue] = set()
         # monotonic timestamp of the last accepted ingest, or None if never.
         self._last_ingest_at: float | None = None
+        # sensor_id -> monotonic timestamp of its last accepted ingest
+        self._sensor_seen: dict[str, float] = {}
         self._prune_task: asyncio.Task | None = None
         self.app.on_shutdown.append(self._on_shutdown)
 
@@ -113,6 +115,7 @@ class WebServer:
         self.app.router.add_get("/api/devices", self.devices_list)
         self.app.router.add_get("/api/devices/stream", self.devices_stream)
         self.app.router.add_get("/api/devices/{mac}/history", self.device_history)
+        self.app.router.add_get("/api/sensors", self.sensors_list)
         self.app.router.add_post("/api/devices/group", self.devices_set_group)
         self.app.router.add_post("/api/devices/watch", self.devices_set_watch)
         self.app.router.add_post("/api/ingest", self.devices_ingest)
@@ -406,16 +409,19 @@ class WebServer:
         payload["address_type"] = address_type(device.mac)
         return payload
 
-    def publish_device(self, device: Device, is_new: bool) -> None:
+    def publish_device(self, device: Device, is_new: bool,
+                       sensor_id: str | None = None) -> None:
         """
         Fans a device observation out to connected SSE clients.
 
-        Called by the daemon's scan loop; safe to call with no subscribers.
+        Safe to call with no subscribers.
         """
         if not self._device_subscribers:
             return
 
-        message = {"device": self._device_payload(device), "is_new": is_new}
+        payload = self._device_payload(device)
+        payload["last_sensor"] = sensor_id
+        message = {"device": payload, "is_new": is_new}
         for queue in list(self._device_subscribers):
             try:
                 queue.put_nowait(message)
@@ -426,17 +432,19 @@ class WebServer:
         """
         Records a batch of scanned devices and fans them out to SSE clients.
 
-        The single funnel for observations, whether they arrive over HTTP from a
-        remote sensor or in-process. Returns (recorded, new_count).
+        The single funnel for observations. Returns (recorded, new_count).
         """
         results = await db.record_devices(devices, sensor_id=sensor_id)
         new_count = 0
         for device, is_new in results:
-            self.publish_device(device, is_new)
+            self.publish_device(device, is_new, sensor_id)
             if is_new:
                 new_count += 1
 
-        self._last_ingest_at = time.monotonic()
+        now = time.monotonic()
+        self._last_ingest_at = now
+        if sensor_id:
+            self._sensor_seen[sensor_id] = now
         self._broadcast_status()  # flip the dashboard to "scanning" immediately
         return len(results), new_count
 
@@ -484,7 +492,7 @@ class WebServer:
 
         # A sensor may self-identify; otherwise fall back to its source address.
         sensor = body.get("sensor") if isinstance(body, dict) else None
-        sensor_id = str(sensor)[:64] if sensor else request.remote
+        sensor_id = (str(sensor).strip()[:64] if sensor else "") or request.remote
 
         recorded, new_count = await self.ingest(devices, sensor_id=sensor_id)
         return web.json_response({"recorded": recorded, "new": new_count})
@@ -498,9 +506,35 @@ class WebServer:
         since = self._iso_or_none(request.query.get("since"))
         until = self._iso_or_none(request.query.get("until"))
         devices = await db.list_devices(since=since, until=until)
-        return web.json_response(
-            {"devices": [self._device_payload(d) for d in devices]}
-        )
+        latest = await db.latest_sensor_by_mac()
+        payloads = []
+        for d in devices:
+            p = self._device_payload(d)
+            p["last_sensor"] = latest.get(d.mac)
+            payloads.append(p)
+        return web.json_response({"devices": payloads})
+
+    async def sensors_list(self, request: web.Request) -> web.Response:
+        """Per-sensor rollup: history counts + live freshness this session."""
+        now = time.monotonic()
+        rows = await db.list_sensors()
+        seen: set[str] = set()
+        out = []
+        for r in rows:
+            sid = r["sensor_id"]
+            seen.add(sid)
+            mono = self._sensor_seen.get(sid)
+            age = round(now - mono, 1) if mono is not None else None
+            out.append({**r, "age_s": age,
+                        "live": age is not None and age <= SENSOR_STALE_SECONDS})
+        for sid, mono in self._sensor_seen.items():
+            if sid not in seen:
+                age = round(now - mono, 1)
+                out.append({"sensor_id": sid, "sightings": 0, "devices": 0,
+                            "last_seen": None, "age_s": age,
+                            "live": age <= SENSOR_STALE_SECONDS})
+        out.sort(key=lambda s: (not s["live"], -s["sightings"]))
+        return web.json_response({"sensors": out, "stale_after_s": SENSOR_STALE_SECONDS})
 
     @staticmethod
     def _iso_or_none(value: str | None) -> str | None:

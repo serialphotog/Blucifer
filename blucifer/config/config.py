@@ -1,6 +1,7 @@
 """The basic configuration for Blucifer."""
 
 import os
+import socket
 
 from pathlib import Path
 
@@ -19,6 +20,8 @@ WEB_PORT: int = int(os.environ.get("BLUCIFER_WEB_PORT", "8080"))
 SIGHTINGS_RETENTION_DAYS: int = int(os.environ.get("BLUCIFER_SIGHTINGS_RETENTION_DAYS", "30"))
 
 # ---- sensor node ----
+# How this sensor identifies itself to the web node (which room / box).
+SENSOR_NAME: str = os.environ.get("BLUCIFER_SENSOR_NAME") or socket.gethostname()
 # Base URL of the web node the sensor pushes observations to.
 SERVER_URL: str | None = os.environ.get("BLUCIFER_SERVER_URL")
 # Shared secret for POST /api/ingest (required when sensor and web are on
