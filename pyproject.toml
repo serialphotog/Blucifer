@@ -1,0 +1,84 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "blucifer"
+version = "0.1.0"
+description = "A Bluetooth reconnaissance multi-tool: scan for nearby devices and build patterns of life"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Adam Thompson", email = "adamthacks@gmail.com" },
+]
+keywords = ["bluetooth", "ble", "reconnaissance", "scanner", "osint"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: Console",
+    "Framework :: aiohttp",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: System :: Networking :: Monitoring",
+]
+
+# Shared by both services: the sensor POSTs over aiohttp and spools to aiosqlite;
+# the web node serves over aiohttp and stores in aiosqlite.
+dependencies = [
+    "aiohttp>=3.9",
+    "aiosqlite>=0.19",
+]
+
+[project.optional-dependencies]
+# The dashboard / database / ingest API node.
+web = [
+    "aiohttp-jinja2>=1.5",
+    "bcrypt>=4.0",
+    "jinja2>=3.1",
+]
+# A Bluetooth sensor node.
+sensor = [
+    "bleak>=3.0",
+    "dbus-fast>=2.0; sys_platform == 'linux'",
+    "mac-vendor-lookup>=0.1.12",
+]
+# Both services on one host (the common local setup).
+all = [
+    "blucifer[web,sensor]",
+]
+dev = [
+    "blucifer[web,sensor]",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.6",
+    "mypy>=1.11",
+]
+
+[project.urls]
+Homepage = "https://hackeradam.com"
+
+[project.scripts]
+blucifer = "blucifer.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/blucifer"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "W"]
+
+[tool.mypy]
+python_version = "3.10"
+packages = ["blucifer"]
+ignore_missing_imports = true

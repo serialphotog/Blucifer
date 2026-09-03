@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Blucifer — Settings{% endblock %}
+{% block content %}
+  <h1>Settings</h1>
+
+  <form method="post" action="/settings">
+    <h2>Authentication</h2>
+
+    <div class="row">
+      <input type="checkbox" id="auth_enabled" name="auth_enabled"
+             {% if auth_enabled %}checked{% endif %}>
+      <label for="auth_enabled">Require login to access the dashboard</label>
+    </div>
+
+    <label for="username">Username</label>
+    <input type="text" id="username" name="username" value="{{ username }}"
+           autocomplete="username">
+
+    <label for="new_password">{% if has_password %}New password{% else %}Password{% endif %}</label>
+    <input type="password" id="new_password" name="new_password" autocomplete="new-password"
+           placeholder="{% if has_password %}leave blank to keep current password{% else %}at least {{ min_password_length }} characters{% endif %}">
+
+    <label for="confirm_password">Confirm password</label>
+    <input type="password" id="confirm_password" name="confirm_password"
+           autocomplete="new-password">
+
+    <p class="muted">
+      Enabling authentication requires a username and a password. Leave the
+      password fields blank to keep the current one.
+    </p>
+
+    <button type="submit">Save settings</button>
+  </form>
+{% endblock %}

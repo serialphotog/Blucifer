@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Blucifer{% endblock %}</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Cpolygon%20points='14,2%2016,6%2018,5%2021,7%2019,9%2022,11%2020,13%2023,15%2021,17%2024,19%2024,30%2013,30%2013,25%2012,21%2010,19%207,18%203,18%206,15%209,12%2011,8%2012,5'%20fill='%232b86ff'/%3E%3Ccircle%20cx='11.5'%20cy='10.2'%20r='2'%20fill='%23ff4a2b'/%3E%3C/svg%3E">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0a0b0d;
+      --panel: #101215;
+      --panel-2: #15181d;
+      --row-hover: #16191f;
+      --border: #23272e;
+      --border-bright: #313742;
+      --text: #c7ccd4;
+      --text-dim: #6b7280;
+      --text-bright: #e9ecf1;
+      /* Blucifer — the Blue Mustang at DEN: cerulean body, glowing red-orange eyes */
+      --blucifer: #2b86ff;
+      --ember: #ff4a2b;
+      --red: #ff4a2b;      /* alerts share the "eyes" hue */
+      --green: #22c55e;
+      --orange: #f59e0b;
+      --blue: #4f8ff7;
+      --cyan: #22d3ee;
+      --yellow: #eab308;
+      --purple: #a78bfa;
+      --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0; background: var(--bg); color: var(--text);
+      font: 13px/1.5 var(--mono);
+      display: flex; flex-direction: column;
+      -webkit-font-smoothing: antialiased;
+    }
+    /* atmospheric glow — an electric-blue horse on the plains, with a red eye */
+    body::before {
+      content: ""; position: fixed; inset: 0; z-index: -2; pointer-events: none;
+      background:
+        radial-gradient(58vmax 58vmax at 93% 112%, rgba(43,134,255,.11), transparent 70%),
+        radial-gradient(34vmax 34vmax at 6% -10%, rgba(255,74,43,.05), transparent 70%);
+    }
+    body::after {
+      content: ""; position: fixed; right: -5vmax; bottom: -7vmax;
+      width: 46vmax; height: 46vmax; z-index: -1; pointer-events: none; opacity: .05;
+      background: var(--blucifer);
+      -webkit-mask: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Cpolygon%20points='14,2%2016,6%2018,5%2021,7%2019,9%2022,11%2020,13%2023,15%2021,17%2024,19%2024,30%2013,30%2013,25%2012,21%2010,19%207,18%203,18%206,15%209,12%2011,8%2012,5'%20fill='black'/%3E%3C/svg%3E") center / contain no-repeat;
+      mask: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Cpolygon%20points='14,2%2016,6%2018,5%2021,7%2019,9%2022,11%2020,13%2023,15%2021,17%2024,19%2024,30%2013,30%2013,25%2012,21%2010,19%207,18%203,18%206,15%209,12%2011,8%2012,5'%20fill='black'/%3E%3C/svg%3E") center / contain no-repeat;
+    }
+    a { color: inherit; text-decoration: none; }
+
+    .label {
+      text-transform: uppercase; letter-spacing: .14em;
+      font-size: .68rem; color: var(--text-dim);
+    }
+
+    /* ---- header ---- */
+    header {
+      display: flex; align-items: center; gap: 2rem;
+      padding: .7rem 1.25rem; background: var(--panel);
+      border-top: 2px solid var(--blucifer);
+      border-bottom: 1px solid var(--border);
+      box-shadow: 0 1px 0 color-mix(in srgb, var(--blucifer) 22%, transparent);
+    }
+    .brand {
+      display: flex; align-items: center; gap: .6rem;
+      font-weight: 700; letter-spacing: .18em; font-size: .9rem;
+      text-transform: uppercase;
+    }
+    .brand svg { width: 20px; height: 20px; filter: drop-shadow(0 0 5px color-mix(in srgb, var(--blucifer) 60%, transparent)); }
+    .brand svg .body { fill: var(--blucifer); }
+    .brand svg .eye { fill: var(--ember); filter: drop-shadow(0 0 2.5px var(--ember)); }
+    .brand b { color: var(--blucifer); font-weight: 700; text-shadow: 0 0 12px color-mix(in srgb, var(--blucifer) 55%, transparent); }
+    .brand i { color: var(--text-bright); font-style: normal; }
+    header nav { display: flex; gap: 1.5rem; flex: 1; }
+    header nav a {
+      text-transform: uppercase; letter-spacing: .12em; font-size: .72rem;
+      color: var(--text-dim); padding-bottom: 2px; border-bottom: 1px solid transparent;
+    }
+    header nav a:hover { color: var(--text); }
+    header nav a.active { color: var(--text-bright); border-bottom-color: var(--blucifer); }
+    header .status-slot { display: flex; align-items: center; gap: 1.25rem; }
+    header form { margin: 0; }
+    header form button { margin: 0; padding: .3rem .7rem; font-size: .68rem; }
+
+    /* ---- main ---- */
+    main { flex: 1; width: 100%; max-width: 620px; margin: 0 auto; padding: 2rem 1.25rem; }
+    main.wide { max-width: none; padding: 1.25rem; }
+
+    h1 { font-size: 1.1rem; text-transform: uppercase; letter-spacing: .1em; color: var(--text-bright); }
+    h2 { font-size: .95rem; text-transform: uppercase; letter-spacing: .08em; margin-top: 1.75rem; color: var(--text-bright); }
+
+    .flash { padding: .55rem .8rem; margin-bottom: 1rem; border: 1px solid var(--border-bright); border-left-width: 3px; }
+    .flash.ok  { border-left-color: var(--green); color: var(--text-bright); }
+    .flash.err { border-left-color: var(--ember); color: var(--text-bright); }
+
+    label { display: block; margin: 1rem 0 .35rem; }
+    input[type=text], input[type=password] {
+      width: 100%; padding: .5rem .65rem; font: inherit;
+      background: var(--bg); color: var(--text-bright);
+      border: 1px solid var(--border-bright); border-radius: 2px;
+    }
+    input[type=text]:focus, input[type=password]:focus { outline: 1px solid var(--blucifer); border-color: var(--blucifer); }
+    input[type=checkbox] { accent-color: var(--blucifer); }
+    form .row { display: flex; align-items: center; gap: .5rem; margin: 1.1rem 0; }
+    form .row label { margin: 0; }
+    button {
+      margin-top: 1.25rem; padding: .5rem 1.1rem; font: inherit;
+      text-transform: uppercase; letter-spacing: .1em; font-size: .72rem;
+      background: var(--panel-2); color: var(--text-bright);
+      border: 1px solid var(--border-bright); border-radius: 2px; cursor: pointer;
+    }
+    button:hover { border-color: var(--blucifer); color: var(--blucifer); }
+    .muted { color: var(--text-dim); }
+
+    /* ---- live status pill (shared) — the horse's eye ---- */
+    .scanstate { display: flex; align-items: center; gap: .5rem; font-size: .72rem; letter-spacing: .12em; text-transform: uppercase; color: var(--text-dim); }
+    .scanstate .dot { width: .55rem; height: .55rem; border-radius: 50%; background: var(--text-dim); }
+    .scanstate.live { color: var(--ember); }
+    .scanstate.live .dot { background: var(--ember); box-shadow: 0 0 9px var(--ember); animation: pulse 1.8s ease-in-out infinite; }
+    .scanstate.offline { color: color-mix(in srgb, var(--red) 75%, var(--text-dim)); }
+    .scanstate.offline .dot { background: var(--red); }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+    .clock { font-size: .72rem; color: var(--text-dim); letter-spacing: .1em; }
+  </style>
+  {% block head %}{% endblock %}
+</head>
+<body>
+  {% block chrome %}
+  <header>
+    <span class="brand">
+      <svg viewBox="0 0 32 32" aria-hidden="true">
+        <polygon class="body" points="14,2 16,6 18,5 21,7 19,9 22,11 20,13 23,15 21,17 24,19 24,30 13,30 13,25 12,21 10,19 7,18 3,18 6,15 9,12 11,8 12,5"/>
+        <circle class="eye" cx="11.5" cy="10.2" r="1.6"/>
+      </svg>
+      <span class="name"><b>Blu</b><i>cifer</i></span>
+    </span>
+    <nav>
+      <a href="/" class="{{ 'active' if request.path == '/' else '' }}">Recon</a>
+      <a href="/settings" class="{{ 'active' if request.path.startswith('/settings') else '' }}">Config</a>
+    </nav>
+    <span class="status-slot">
+      {% block header_status %}{% endblock %}
+      {% if auth_enabled %}
+      <form method="post" action="/api/auth/logout"><button type="submit">Log out</button></form>
+      {% endif %}
+    </span>
+  </header>
+  {% endblock %}
+  <main class="{% block main_class %}{% endblock %}">
+    {% if message %}<div class="flash ok">{{ message }}</div>{% endif %}
+    {% if error %}<div class="flash err">{{ error }}</div>{% endif %}
+    {% block content %}{% endblock %}
+  </main>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

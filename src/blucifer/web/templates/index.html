@@ -1,0 +1,554 @@
+{% extends "base.html" %}
+{% block title %}Blucifer — Recon{% endblock %}
+{% block main_class %}wide{% endblock %}
+
+{% block header_status %}
+  <span id="scanstate" class="scanstate"><span class="dot"></span><span id="scantext">connecting</span></span>
+  <span id="clock" class="clock">--:--:--</span>
+{% endblock %}
+
+{% block head %}
+<style>
+  .console { display: grid; grid-template-columns: 232px 1fr; gap: 1.25rem; align-items: start; }
+  @media (max-width: 880px) { .console { grid-template-columns: 1fr; } }
+
+  .side { display: flex; flex-direction: column; gap: 1.5rem; }
+  .side section { display: flex; flex-direction: column; gap: .5rem; }
+  .side h3 { margin: 0 0 .25rem; font: inherit; }
+  .side input[type="datetime-local"] {
+    width: 100%; padding: .4rem .5rem; font: inherit; color-scheme: dark;
+    background: var(--bg); color: var(--text-bright);
+    border: 1px solid var(--border-bright); border-radius: 2px;
+  }
+  .daterow { display: flex; gap: .5rem; }
+  .daterow button { margin-top: .35rem; flex: 1; }
+
+  .stat {
+    border: 1px solid var(--border); border-left: 2px solid var(--border-bright);
+    padding: .6rem .75rem; display: flex; flex-direction: column; gap: .2rem;
+    background: var(--panel);
+  }
+  .stat .k { font-size: .66rem; text-transform: uppercase; letter-spacing: .12em; color: var(--text-dim); }
+  .stat .v { font-size: 1.5rem; font-weight: 700; line-height: 1; color: var(--text-bright); }
+  .stat.total .v { color: var(--ember); }
+  .stat.active .v { color: var(--green); }
+  .stat.fresh .v { color: var(--orange); }
+  .stat.random .v { color: var(--blucifer); }
+  .stat.random { border-left-color: color-mix(in srgb, var(--blucifer) 55%, var(--border-bright)); }
+
+  ul.filters { list-style: none; margin: 0; padding: 0; }
+  ul.filters li {
+    display: flex; justify-content: space-between; gap: .5rem;
+    padding: .32rem .5rem; cursor: pointer; border-left: 2px solid transparent;
+    color: var(--text-dim);
+  }
+  ul.filters li:hover { color: var(--text); background: var(--panel); }
+  ul.filters li.active { color: var(--text-bright); border-left-color: var(--red); background: var(--panel); }
+  ul.filters li .c { color: var(--text-dim); }
+  ul.filters li.zero { opacity: .4; }
+
+  .toolbar { display: flex; gap: .75rem; margin-bottom: 1rem; }
+  .toolbar input { flex: 1; }
+
+  .selbar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: .6rem;
+    padding: .55rem .8rem; margin-bottom: 1rem;
+    border: 1px solid var(--border-bright); border-left: 2px solid var(--blucifer);
+    background: var(--panel);
+  }
+  .selbar .selcount { color: var(--text-bright); font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; }
+  .selbar input { padding: .35rem .5rem; font: inherit; color: var(--text-bright);
+    background: var(--bg); border: 1px solid var(--border-bright); border-radius: 2px; }
+  .selbar button { margin-top: 0; padding: .35rem .8rem; }
+  .selbar .spacer { flex: 1; }
+
+  .panel { border: 1px solid var(--border); border-top: 2px solid color-mix(in srgb, var(--blucifer) 45%, var(--border)); background: var(--panel); }
+  .panel-head {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: .7rem 1rem; border-bottom: 1px solid var(--border);
+    text-transform: uppercase; letter-spacing: .12em; font-size: .72rem; color: var(--text-bright);
+  }
+  .panel-head .dim { color: var(--text-dim); letter-spacing: .08em; }
+
+  .wrap { overflow-x: auto; }
+  table.devices { border-collapse: collapse; width: 100%; table-layout: auto; }
+  table.devices tr { display: table-row; }
+  table.devices th, table.devices td {
+    display: table-cell; text-align: left; padding: .5rem 1rem;
+    border-bottom: 1px solid var(--border); white-space: nowrap; vertical-align: middle;
+  }
+  table.devices thead th {
+    position: sticky; top: 0; background: var(--panel-2); color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: .1em; font-size: .66rem; font-weight: 600;
+  }
+  table.devices th.check, table.devices td.check { padding-right: .25rem; width: 1px; }
+  table.devices th.star, table.devices td.star { padding-left: .35rem; padding-right: .35rem; width: 1px; }
+  table.devices td.addr { color: var(--text-bright); }
+  table.devices td.addr .at { color: var(--text-dim); font-size: .82em; margin-left: .5rem; }
+  table.devices th.num, table.devices td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  table.devices td.name { width: 99%; white-space: normal; }
+  table.devices td.sightings { color: var(--orange); }
+  table.devices td.reason { color: var(--text-dim); font-style: italic; }
+  table.devices td.seen.now { color: var(--green); }
+  table.devices td.seen { color: var(--text-dim); }
+  table.devices td.group.none { color: var(--text-dim); }
+  table.devices tr.isnew td { animation: flashrow 3s ease-out; }
+  @keyframes flashrow { from { background: rgba(255,74,43,.15); } to { background: transparent; } }
+
+  button.star {
+    margin: 0; padding: 0 .15rem; border: 0; background: none; cursor: pointer;
+    font-size: .95rem; line-height: 1; color: var(--border-bright);
+  }
+  button.star:hover { color: var(--text-dim); }
+  button.star.on { color: var(--ember); text-shadow: 0 0 6px color-mix(in srgb, var(--ember) 55%, transparent); }
+
+  .badge {
+    display: inline-block; min-width: 6.5rem; text-align: center;
+    padding: .12rem .45rem; font-size: .66rem; letter-spacing: .08em;
+    text-transform: uppercase; border: 1px solid var(--border-bright); color: var(--text-dim);
+  }
+  .badge b { font-weight: 700; opacity: .8; margin-right: .35rem; }
+  .badge.phone      { color: var(--blue);   border-color: color-mix(in srgb, var(--blue) 55%, transparent); }
+  .badge.computer   { color: var(--cyan);   border-color: color-mix(in srgb, var(--cyan) 55%, transparent); }
+  .badge.audio      { color: var(--green);  border-color: color-mix(in srgb, var(--green) 55%, transparent); }
+  .badge.wearable   { color: var(--orange); border-color: color-mix(in srgb, var(--orange) 55%, transparent); }
+  .badge.tv         { color: var(--purple); border-color: color-mix(in srgb, var(--purple) 55%, transparent); }
+  .badge.iot        { color: var(--yellow); border-color: color-mix(in srgb, var(--yellow) 55%, transparent); }
+  .badge.tag        { color: var(--ember);  border-color: color-mix(in srgb, var(--ember) 55%, transparent); }
+  .badge.peripheral { color: var(--cyan);   border-color: color-mix(in srgb, var(--cyan) 55%, transparent); }
+  .badge.health     { color: var(--green);  border-color: color-mix(in srgb, var(--green) 55%, transparent); }
+  .badge.vehicle    { color: var(--orange); border-color: color-mix(in srgb, var(--orange) 55%, transparent); }
+  .badge.beacon     { color: var(--text-dim); }
+
+  .empty { padding: 1.5rem 1rem; color: var(--text-dim); }
+  .note { color: var(--text-dim); font-size: .78rem; margin: 1rem 0 0; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="console">
+  <aside class="side">
+    <section>
+      <h3 class="label">Signal Stats</h3>
+      <div class="stat total"><span class="k">Identified</span><span class="v" id="s-total">0</span></div>
+      <div class="stat active"><span class="k">Active</span><span class="v" id="s-active">0</span></div>
+      <div class="stat fresh"><span class="k">New this session</span><span class="v" id="s-new">0</span></div>
+      <div class="stat random"><span class="k">Randomized</span><span class="v" id="s-random">0</span></div>
+    </section>
+    <section>
+      <h3 class="label">Filter by Class</h3>
+      <ul class="filters" id="filters"></ul>
+    </section>
+    <section>
+      <h3 class="label">Groups</h3>
+      <ul class="filters" id="groups"></ul>
+    </section>
+    <section>
+      <h3 class="label">Date Range</h3>
+      <input type="datetime-local" id="datefrom" aria-label="Seen from">
+      <input type="datetime-local" id="dateto" aria-label="Seen until">
+      <div class="daterow">
+        <button id="datequery" type="button">Query</button>
+        <button id="dateclear" type="button">Clear</button>
+      </div>
+    </section>
+  </aside>
+
+  <div class="content">
+    <div class="toolbar">
+      <input id="search" type="text" placeholder="search address, vendor, name, or group…" autocomplete="off" spellcheck="false">
+      <button id="export" type="button">Export CSV</button>
+    </div>
+
+    <div class="selbar" id="selbar" hidden>
+      <span class="selcount" id="selcount">0 selected</span>
+      <input id="groupinput" type="text" placeholder="group name…" list="grouplist" autocomplete="off">
+      <datalist id="grouplist"></datalist>
+      <button id="assigngroup" type="button">Assign group</button>
+      <button id="cleargroup" type="button">Clear group</button>
+      <button id="watchbtn" type="button">Watch</button>
+      <button id="unwatchbtn" type="button">Unwatch</button>
+      <span class="spacer"></span>
+      <button id="clearsel" type="button">Clear selection</button>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><span>Observed Devices</span><span class="dim" id="shown">0 shown</span></div>
+      <div class="wrap">
+        <table class="devices">
+          <thead>
+            <tr>
+              <th class="check"><input type="checkbox" id="selectall" aria-label="Select all"></th>
+              <th class="star" aria-label="Watched"></th>
+              <th>Class</th><th>Address</th><th>Vendor</th><th class="name">Name</th>
+              <th class="num">RSSI</th><th class="num">Sightings</th><th>Last seen</th><th>Group</th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+      <p id="empty" class="empty" hidden>No devices observed yet — waiting for the scanner…</p>
+    </div>
+
+    <p class="note">
+      Vendor is resolved from the address OUI. Devices with a <b>random</b> address
+      (most phones &amp; wearables) or a macOS <b>uuid</b> expose no OUI, so no vendor
+      is available.
+    </p>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const rowsEl = document.getElementById("rows");
+  const emptyEl = document.getElementById("empty");
+  const filtersEl = document.getElementById("filters");
+  const groupsEl = document.getElementById("groups");
+  const searchEl = document.getElementById("search");
+  const shownEl = document.getElementById("shown");
+  const scanEl = document.getElementById("scanstate");
+  const scanText = document.getElementById("scantext");
+  const clockEl = document.getElementById("clock");
+  const selbarEl = document.getElementById("selbar");
+  const selcountEl = document.getElementById("selcount");
+  const selectAllEl = document.getElementById("selectall");
+  const groupInputEl = document.getElementById("groupinput");
+  const groupListEl = document.getElementById("grouplist");
+
+  const devices = new Map();          // mac -> device
+  const newThisSession = new Set();   // macs first seen while this page is open
+  const recentNew = new Map();        // mac -> timestamp, for the row flash
+  const selected = new Set();         // macs currently checked
+  let activeFilter = "all";
+  let term = "";
+  let dateFrom = null;                // epoch ms, or null
+  let dateTo = null;
+
+  const CLASSES = [
+    ["phone", "Phones", "PHN"],
+    ["computer", "Computers", "CPU"],
+    ["audio", "Audio", "AUD"],
+    ["wearable", "Wearables", "WBL"],
+    ["tv", "TVs & Media", "TV"],
+    ["iot", "IoT / Home", "IOT"],
+    ["tag", "Trackers", "TAG"],
+    ["peripheral", "Peripherals", "HID"],
+    ["health", "Health", "MED"],
+    ["vehicle", "Vehicles", "CAR"],
+    ["beacon", "Beacons", "BCN"],
+  ];
+  const CLASS_META = Object.fromEntries(CLASSES.map(([k, label, code]) => [k, { label, code }]));
+
+  const VENDOR_REASON = {
+    random: "randomized address",
+    uuid: "macOS uuid — no MAC",
+    public: "OUI not in database",
+  };
+
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  ));
+
+  function classKey(dev) {
+    const key = String(dev.class_label || "").trim().toLowerCase();
+    return CLASS_META[key] ? key : "unknown";
+  }
+
+  function classBadge(dev) {
+    const key = classKey(dev);
+    if (key === "unknown") return `<span class="badge"><b>---</b>unknown</span>`;
+    const code = CLASS_META[key].code;
+    const inner = key.startsWith(code.toLowerCase()) ? key : `<b>${code}</b>${key}`;
+    return `<span class="badge ${key}">${inner}</span>`;
+  }
+
+  function relTime(iso) {
+    if (!iso) return { text: "—", now: false };
+    const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+    if (s < 15) return { text: "now", now: true };
+    if (s < 60) return { text: Math.floor(s) + "s", now: false };
+    if (s < 3600) return { text: Math.floor(s / 60) + "m", now: false };
+    if (s < 86400) return { text: Math.floor(s / 3600) + "h", now: false };
+    return { text: Math.floor(s / 86400) + "d", now: false };
+  }
+
+  function groupNames() {
+    return [...new Set([...devices.values()].map((d) => d.group_name).filter(Boolean))].sort();
+  }
+
+  function matches(dev) {
+    const t = dev.last_seen ? new Date(dev.last_seen).getTime() : NaN;
+    if (dateFrom != null && !(t >= dateFrom)) return false;
+    if (dateTo != null && !(t <= dateTo)) return false;
+
+    const f = activeFilter;
+    if (f === "watched") { if (!dev.watched) return false; }
+    else if (f.startsWith("group:")) { if ((dev.group_name || "") !== f.slice(6)) return false; }
+    else if (f === "unknown") { if (classKey(dev) !== "unknown") return false; }
+    else if (f !== "all") { if (classKey(dev) !== f) return false; }
+
+    if (term) {
+      const hay = `${dev.mac} ${dev.vendor || ""} ${dev.friendly_name || ""} ${dev.class_label || ""} ${dev.group_name || ""}`.toLowerCase();
+      if (!hay.includes(term)) return false;
+    }
+    return true;
+  }
+
+  function currentList() {
+    return [...devices.values()]
+      .filter(matches)
+      .sort((a, b) => String(b.last_seen).localeCompare(String(a.last_seen)));
+  }
+
+  function vendorCell(dev) {
+    if (dev.vendor) return `<td>${esc(dev.vendor)}</td>`;
+    return `<td class="reason">${esc(VENDOR_REASON[dev.address_type] || "")}</td>`;
+  }
+
+  function renderRows() {
+    const list = currentList();
+    rowsEl.innerHTML = list.map((dev) => {
+      const rt = relTime(dev.last_seen);
+      const flash = recentNew.has(dev.mac) ? "isnew" : "";
+      const checked = selected.has(dev.mac) ? "checked" : "";
+      const on = dev.watched ? "on" : "";
+      return (
+        `<tr class="${flash}">` +
+          `<td class="check"><input class="rowcheck" type="checkbox" data-mac="${esc(dev.mac)}" ${checked}></td>` +
+          `<td class="star"><button class="star ${on}" data-mac="${esc(dev.mac)}" title="${dev.watched ? "Unwatch" : "Watch"}">★</button></td>` +
+          `<td>${classBadge(dev)}</td>` +
+          `<td class="addr">${esc(dev.mac)}<span class="at">${esc(dev.address_type || "")}</span></td>` +
+          vendorCell(dev) +
+          `<td class="name">${esc(dev.friendly_name || "")}</td>` +
+          `<td class="num">${dev.rssi ?? ""}</td>` +
+          `<td class="num sightings">${dev.total_sightings ?? ""}</td>` +
+          `<td class="seen${rt.now ? " now" : ""}">${rt.text}</td>` +
+          `<td class="group ${dev.group_name ? "" : "none"}">${dev.group_name ? esc(dev.group_name) : "—"}</td>` +
+        `</tr>`
+      );
+    }).join("");
+    emptyEl.hidden = list.length > 0 || devices.size > 0;
+    shownEl.textContent = `${list.length} shown`;
+
+    const sel = list.filter((d) => selected.has(d.mac)).length;
+    selectAllEl.checked = list.length > 0 && sel === list.length;
+    selectAllEl.indeterminate = sel > 0 && sel < list.length;
+  }
+
+  function renderStats() {
+    const all = [...devices.values()];
+    const activeCutoff = Date.now() - 60000;
+    document.getElementById("s-total").textContent = all.length;
+    document.getElementById("s-active").textContent =
+      all.filter((d) => d.last_seen && new Date(d.last_seen).getTime() >= activeCutoff).length;
+    document.getElementById("s-new").textContent = newThisSession.size;
+    document.getElementById("s-random").textContent =
+      all.filter((d) => d.address_type === "random").length;
+  }
+
+  function filterEntry(key, label, n, dimZero) {
+    const active = activeFilter === key ? "active" : "";
+    const zero = dimZero && n === 0 ? "zero" : "";
+    return `<li class="${(active + " " + zero).trim()}" data-filter="${esc(key)}">` +
+           `<span>${esc(label)}</span><span class="c">${n}</span></li>`;
+  }
+
+  function renderFilters() {
+    const all = [...devices.values()];
+    const counts = { all: all.length, unknown: all.filter((d) => classKey(d) === "unknown").length };
+    for (const [key] of CLASSES) counts[key] = all.filter((d) => classKey(d) === key).length;
+
+    filtersEl.innerHTML =
+      filterEntry("all", "All Targets", counts.all, false) +
+      CLASSES.map(([key, name]) => filterEntry(key, name, counts[key], true)).join("") +
+      filterEntry("unknown", "Unclassified", counts.unknown, true);
+  }
+
+  function renderGroups() {
+    const all = [...devices.values()];
+    const watched = all.filter((d) => d.watched).length;
+    let html = filterEntry("watched", "★ Watched", watched, false);
+    for (const g of groupNames()) {
+      html += filterEntry("group:" + g, g, all.filter((d) => (d.group_name || "") === g).length, false);
+    }
+    groupsEl.innerHTML = html;
+    groupListEl.innerHTML = groupNames().map((g) => `<option value="${esc(g)}">`).join("");
+  }
+
+  function renderSelbar() {
+    selbarEl.hidden = selected.size === 0;
+    selcountEl.textContent = `${selected.size} selected`;
+  }
+
+  function render() {
+    renderRows();
+    renderStats();
+    renderFilters();
+    renderGroups();
+    renderSelbar();
+  }
+
+  function upsert(dev, isNew) {
+    const firstTime = !devices.has(dev.mac);
+    devices.set(dev.mac, dev);
+    if (isNew || firstTime) {
+      newThisSession.add(dev.mac);
+      recentNew.set(dev.mac, Date.now());
+      setTimeout(() => { recentNew.delete(dev.mac); }, 3200);
+    }
+    render();
+  }
+
+  // state: "live" (a sensor is feeding us) | "idle" (connected, no sensor) | "offline" (web node unreachable)
+  function setScan(state, text) {
+    scanEl.classList.toggle("live", state === "live");
+    scanEl.classList.toggle("offline", state === "offline");
+    scanText.textContent = text;
+  }
+
+  async function post(url, body) {
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error(`${url} -> ${r.status}`);
+    return r.json();
+  }
+
+  async function assignGroup(group) {
+    const macs = [...selected];
+    if (!macs.length) return;
+    await post("/api/devices/group", { macs, group: group || null });
+    for (const m of macs) { const d = devices.get(m); if (d) d.group_name = group || null; }
+    render();
+  }
+
+  async function setWatch(macs, watched) {
+    macs = macs.filter((m) => devices.has(m));
+    if (!macs.length) return;
+    await post("/api/devices/watch", { macs, watched });
+    for (const m of macs) { const d = devices.get(m); if (d) d.watched = watched; }
+    render();
+  }
+
+  function csvCell(v) {
+    const s = v == null ? "" : String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  }
+
+  function exportCsv() {
+    const cols = ["mac", "address_type", "bt_type", "class_label", "vendor", "friendly_name",
+                  "rssi", "total_sightings", "group_name", "watched", "first_seen", "last_seen"];
+    const lines = [cols.join(",")];
+    for (const d of currentList()) lines.push(cols.map((c) => csvCell(d[c])).join(","));
+    const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `blucifer-devices-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(a.href);
+  }
+
+  // ---- wiring ----
+  document.querySelector(".side").addEventListener("click", (e) => {
+    const li = e.target.closest("li[data-filter]");
+    if (!li) return;
+    activeFilter = li.dataset.filter;
+    render();
+  });
+
+  let searchTimer;
+  searchEl.addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => { term = searchEl.value.trim().toLowerCase(); render(); }, 120);
+  });
+
+  document.getElementById("export").addEventListener("click", exportCsv);
+
+  document.getElementById("datequery").addEventListener("click", () => {
+    const f = document.getElementById("datefrom").value;
+    const t = document.getElementById("dateto").value;
+    dateFrom = f ? new Date(f).getTime() : null;
+    dateTo = t ? new Date(t).getTime() + 59999 : null;
+    render();
+  });
+  document.getElementById("dateclear").addEventListener("click", () => {
+    document.getElementById("datefrom").value = "";
+    document.getElementById("dateto").value = "";
+    dateFrom = dateTo = null;
+    render();
+  });
+
+  rowsEl.addEventListener("change", (e) => {
+    const cb = e.target.closest("input.rowcheck");
+    if (!cb) return;
+    if (cb.checked) selected.add(cb.dataset.mac); else selected.delete(cb.dataset.mac);
+    renderSelbar();
+    renderRows();
+  });
+
+  rowsEl.addEventListener("click", (e) => {
+    const star = e.target.closest("button.star");
+    if (!star) return;
+    const mac = star.dataset.mac;
+    const d = devices.get(mac);
+    if (d) setWatch([mac], !d.watched).catch(() => {});
+  });
+
+  selectAllEl.addEventListener("change", () => {
+    const list = currentList();
+    if (selectAllEl.checked) list.forEach((d) => selected.add(d.mac));
+    else list.forEach((d) => selected.delete(d.mac));
+    render();
+  });
+
+  document.getElementById("clearsel").addEventListener("click", () => {
+    selected.clear();
+    render();
+  });
+  document.getElementById("assigngroup").addEventListener("click", () => {
+    assignGroup(groupInputEl.value.trim()).then(() => { groupInputEl.value = ""; }).catch(() => {});
+  });
+  document.getElementById("cleargroup").addEventListener("click", () => {
+    assignGroup(null).catch(() => {});
+  });
+  document.getElementById("watchbtn").addEventListener("click", () => {
+    setWatch([...selected], true).catch(() => {});
+  });
+  document.getElementById("unwatchbtn").addEventListener("click", () => {
+    setWatch([...selected], false).catch(() => {});
+  });
+
+  function tickClock() {
+    clockEl.textContent = new Date().toLocaleTimeString([], { hour12: false });
+  }
+  tickClock();
+  setInterval(tickClock, 1000);
+  setInterval(render, 2000);  // keep relative times / active count fresh
+
+  fetch("/api/devices")
+    .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+    .then((data) => { for (const d of data.devices) devices.set(d.mac, d); render(); })
+    .catch(() => {});
+
+  const es = new EventSource("/api/devices/stream");
+  es.onopen = () => setScan("idle", "connecting");
+  es.onerror = () => setScan("offline", "offline");
+  es.addEventListener("device", (ev) => {
+    const msg = JSON.parse(ev.data);
+    upsert(msg.device, msg.is_new);
+  });
+  es.addEventListener("status", (ev) => {
+    const s = JSON.parse(ev.data);
+    setScan(s.ingesting ? "live" : "idle", s.ingesting ? "scanning" : "no sensor");
+  });
+
+  render();
+})();
+</script>
+{% endblock %}
