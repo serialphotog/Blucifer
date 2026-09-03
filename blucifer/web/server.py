@@ -35,6 +35,16 @@ _LOOPBACK = {"127.0.0.1", "::1"}
 # Name of the session cookie
 SESSION_COOKIE: str = "session"
 
+# CSRF: double-submit token. Every browser request carries the `csrf` cookie;
+# unsafe methods must echo it in a header or form field.
+CSRF_COOKIE: str = "csrf"
+CSRF_HEADER: str = "X-CSRF-Token"
+CSRF_FIELD: str = "csrf_token"
+_SAFE_METHODS = {"GET", "HEAD", "OPTIONS", "TRACE"}
+# /api/ingest is machine-to-machine (bearer token, no browser) - no CSRF surface.
+_CSRF_EXEMPT = {"/api/ingest"}
+_FORM_CONTENT_TYPES = ("application/x-www-form-urlencoded", "multipart/form-data")
+
 # Minimum length we accept for a new password
 MIN_PASSWORD_LENGTH: int = 8
 
@@ -141,6 +151,26 @@ class WebServer:
     def _clear_session_cookie(self, response: web.StreamResponse) -> None:
         response.del_cookie(SESSION_COOKIE, path="/")
 
+    def _set_csrf_cookie(self, response: web.StreamResponse, token: str) -> None:
+        response.set_cookie(
+            CSRF_COOKIE, token,
+            httponly=True,
+            samesite="Lax",
+            secure=self._secure_cookies,
+            path="/",
+        )
+
+    async def _csrf_valid(self, request: web.Request, expected: str) -> bool:
+        """True if the request echoes the CSRF token in a header or form field."""
+        sent = request.headers.get(CSRF_HEADER)
+        if not sent and request.content_type in _FORM_CONTENT_TYPES:
+            try:
+                form = await request.post()  # cached; handlers re-read the same object
+            except Exception:
+                return False
+            sent = form.get(CSRF_FIELD)
+        return bool(sent) and secrets.compare_digest(str(sent), expected)
+
     async def _check_auth(self, request: web.Request) -> bool:
         """Checks if a given request is authenticated."""
         settings = await db.get_settings()
@@ -155,17 +185,37 @@ class WebServer:
 
     @web.middleware
     async def _auth_middleware(self, request: web.Request, handler):
-        """The authentication middleware for our server."""
-        if request.path in PUBLIC_ROUTES:
-            # This is a public route, authentication doesn't apply here
-            return await handler(request)
+        """CSRF guard + session auth for every request."""
+        # Ensure this client has a CSRF token, and hand it to templates.
+        token = request.cookies.get(CSRF_COOKIE)
+        issue_csrf = token is None
+        if issue_csrf:
+            token = secrets.token_urlsafe(32)
+        request[CSRF_FIELD] = token
 
-        if not await self._check_auth(request):
-            if request.path.startswith("/api/"):
-                return web.json_response({ "error": "Unauthorized" }, status=401)
-            raise web.HTTPFound("/login")
+        if (request.method not in _SAFE_METHODS
+                and request.path not in _CSRF_EXEMPT
+                and not await self._csrf_valid(request, token)):
+            return web.json_response({"error": "CSRF check failed"}, status=403)
 
-        return await handler(request)
+        try:
+            if request.path in PUBLIC_ROUTES:
+                response = await handler(request)
+            elif not await self._check_auth(request):
+                if request.path.startswith("/api/"):
+                    response = web.json_response({"error": "Unauthorized"}, status=401)
+                else:
+                    response = web.HTTPFound("/login")
+            else:
+                response = await handler(request)
+        except web.HTTPException as exc:
+            if issue_csrf:
+                self._set_csrf_cookie(exc, token)
+            raise
+
+        if issue_csrf:
+            self._set_csrf_cookie(response, token)
+        return response
 
     @aiohttp_jinja2.template("index.html")
     async def index(self, request: web.Request) -> dict:

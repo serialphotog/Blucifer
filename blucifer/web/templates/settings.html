@@ -4,6 +4,7 @@
   <h1>Settings</h1>
 
   <form method="post" action="/settings">
+    <input type="hidden" name="csrf_token" value="{{ request['csrf_token'] }}">
     <h2>Authentication</h2>
 
     <div class="row">

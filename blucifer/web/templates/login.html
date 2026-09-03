@@ -4,6 +4,7 @@
 {% block content %}
   <h1>Log in</h1>
   <form method="post" action="/api/auth/login">
+    <input type="hidden" name="csrf_token" value="{{ request['csrf_token'] }}">
     <label for="username">Username</label>
     <input type="text" id="username" name="username" autofocus autocomplete="username">
     <label for="password">Password</label>

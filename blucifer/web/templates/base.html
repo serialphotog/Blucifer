@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ request['csrf_token'] }}">
   <title>{% block title %}Blucifer{% endblock %}</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Cpolygon%20points='14,2%2016,6%2018,5%2021,7%2019,9%2022,11%2020,13%2023,15%2021,17%2024,19%2024,30%2013,30%2013,25%2012,21%2010,19%207,18%203,18%206,15%209,12%2011,8%2012,5'%20fill='%232b86ff'/%3E%3Ccircle%20cx='11.5'%20cy='10.2'%20r='2'%20fill='%23ff4a2b'/%3E%3C/svg%3E">
   <style>
@@ -146,7 +147,10 @@
     <span class="status-slot">
       {% block header_status %}{% endblock %}
       {% if auth_enabled %}
-      <form method="post" action="/api/auth/logout"><button type="submit">Log out</button></form>
+      <form method="post" action="/api/auth/logout">
+        <input type="hidden" name="csrf_token" value="{{ request['csrf_token'] }}">
+        <button type="submit">Log out</button>
+      </form>
       {% endif %}
     </span>
   </header>
