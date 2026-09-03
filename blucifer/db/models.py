@@ -7,6 +7,8 @@ class BluciferSettings:
     auth_enabled: bool = False
     auth_username: str | None = None
     auth_password_hash: str | None = None # Stored as a bcrypt hash
+    # Data retention
+    sightings_retention_days: int = 30    # per-sighting history is pruned past this
 
 @dataclass
 class Device:

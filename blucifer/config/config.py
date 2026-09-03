@@ -14,6 +14,9 @@ DB_PATH: Path = Path(os.environ.get("BLUCIFER_DB_PATH", DATA_DIR / "blucifer.db"
 # ---- web node ----
 WEB_HOST: str = os.environ.get("BLUCIFER_WEB_HOST", "127.0.0.1")
 WEB_PORT: int = int(os.environ.get("BLUCIFER_WEB_PORT", "8080"))
+# Default sighting-history retention (days). Overridden once set in the UI
+# (Settings -> Data Retention); this value only seeds a fresh install.
+SIGHTINGS_RETENTION_DAYS: int = int(os.environ.get("BLUCIFER_SIGHTINGS_RETENTION_DAYS", "30"))
 
 # ---- sensor node ----
 # Base URL of the web node the sensor pushes observations to.

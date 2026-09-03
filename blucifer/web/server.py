@@ -7,7 +7,7 @@ import secrets
 import time
 
 from aiohttp import web
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import blucifer.db as db
@@ -54,6 +54,12 @@ SSE_QUEUE_MAXSIZE: int = 2000
 # How often the SSE stream emits a sensor-status event (also serves as keepalive)
 SSE_STATUS_INTERVAL_SECONDS: int = 10
 
+# Days of history the patterns-of-life summary aggregates over.
+SUMMARY_WINDOW_DAYS: int = 30
+
+# How often the web node prunes expired sighting history.
+_PRUNE_INTERVAL_SECONDS: int = 24 * 3600
+
 # No ingest within this window => the dashboard shows "no sensor" rather than
 # "scanning". Generous enough to tolerate a slow / long-interval sensor.
 SENSOR_STALE_SECONDS: int = max(45, SCAN_INTERVAL_SECONDS * 3)
@@ -84,6 +90,7 @@ class WebServer:
         self._device_subscribers: set[asyncio.Queue] = set()
         # monotonic timestamp of the last accepted ingest, or None if never.
         self._last_ingest_at: float | None = None
+        self._prune_task: asyncio.Task | None = None
         self.app.on_shutdown.append(self._on_shutdown)
 
         aiohttp_jinja2.setup(
@@ -96,6 +103,7 @@ class WebServer:
 
     def _setup_routes(self) -> None:
         self.app.router.add_get("/", self.index)
+        self.app.router.add_get("/devices/{mac}", self.device_page)
         self.app.router.add_get("/login", self.login_page)
         self.app.router.add_get("/settings", self.settings_page)
         self.app.router.add_post("/settings", self.settings_save)
@@ -104,6 +112,7 @@ class WebServer:
         self.app.router.add_get("/api/auth/status", self.auth_status)
         self.app.router.add_get("/api/devices", self.devices_list)
         self.app.router.add_get("/api/devices/stream", self.devices_stream)
+        self.app.router.add_get("/api/devices/{mac}/history", self.device_history)
         self.app.router.add_post("/api/devices/group", self.devices_set_group)
         self.app.router.add_post("/api/devices/watch", self.devices_set_watch)
         self.app.router.add_post("/api/ingest", self.devices_ingest)
@@ -223,6 +232,18 @@ class WebServer:
         settings = await db.get_settings()
         return {"auth_enabled": settings.auth_enabled}
 
+    async def device_page(self, request: web.Request) -> web.Response:
+        """Full detail page for a single device."""
+        mac = request.match_info["mac"]
+        device = await db.get_device(mac)
+        if device is None:
+            raise web.HTTPNotFound(text=f"Unknown device: {mac}")
+        settings = await db.get_settings()
+        return aiohttp_jinja2.render_template("device.html", request, {
+            "auth_enabled": settings.auth_enabled,
+            "device": self._device_payload(device),
+        })
+
     async def login_page(self, request: web.Request) -> web.Response:
         """Serves the login form."""
         settings = await db.get_settings()
@@ -248,11 +269,16 @@ class WebServer:
                                error: str | None = None,
                                status: int = 200) -> web.Response:
         settings = await db.get_settings()
+        # Show what the user typed on a validation error, not the stored value.
+        form = await request.post() if request.method == "POST" else {}
         context = {
             "auth_enabled": settings.auth_enabled,
             "username": settings.auth_username or "",
             "has_password": bool(settings.auth_password_hash),
             "min_password_length": MIN_PASSWORD_LENGTH,
+            "retention_days": form.get("sightings_retention_days") or settings.sightings_retention_days,
+            "retention_min": db.RETENTION_MIN_DAYS,
+            "retention_max": db.RETENTION_MAX_DAYS,
             "message": message,
             "error": error,
         }
@@ -312,6 +338,21 @@ class WebServer:
         new_password = str(form.get("new_password", ""))
         confirm_password = str(form.get("confirm_password", ""))
 
+        retention = current.sightings_retention_days
+        raw_retention = form.get("sightings_retention_days")
+        if raw_retention not in (None, ""):
+            try:
+                retention = int(str(raw_retention))
+            except ValueError:
+                return await self._render_settings(
+                    request, error="Retention must be a whole number of days.", status=400)
+            if not (db.RETENTION_MIN_DAYS <= retention <= db.RETENTION_MAX_DAYS):
+                return await self._render_settings(
+                    request,
+                    error=f"Retention must be between {db.RETENTION_MIN_DAYS} and "
+                          f"{db.RETENTION_MAX_DAYS} days.",
+                    status=400)
+
         password_hash = current.auth_password_hash
 
         # A password change is optional - only act if either field was filled.
@@ -339,8 +380,12 @@ class WebServer:
             auth_enabled=auth_enabled,
             auth_username=username or None,
             auth_password_hash=password_hash,
+            sightings_retention_days=retention,
         ))
-        logger.info(f"Settings updated (auth_enabled={auth_enabled})")
+        logger.info(
+            f"Settings updated (auth_enabled={auth_enabled}, "
+            f"retention={retention}d)"
+        )
 
         # Post/redirect/get. If auth was just turned on, hand the caller a
         # session so saving the form doesn't immediately lock them out.
@@ -377,14 +422,14 @@ class WebServer:
             except asyncio.QueueFull:
                 logger.debug("SSE subscriber queue full - dropping a device update")
 
-    async def ingest(self, devices: list) -> tuple[int, int]:
+    async def ingest(self, devices: list, sensor_id: str | None = None) -> tuple[int, int]:
         """
         Records a batch of scanned devices and fans them out to SSE clients.
 
         The single funnel for observations, whether they arrive over HTTP from a
         remote sensor or in-process. Returns (recorded, new_count).
         """
-        results = await db.record_devices(devices)
+        results = await db.record_devices(devices, sensor_id=sensor_id)
         new_count = 0
         for device, is_new in results:
             self.publish_device(device, is_new)
@@ -437,7 +482,11 @@ class WebServer:
         except (ValueError, KeyError, TypeError) as ex:
             return web.json_response({"error": f"bad request: {ex}"}, status=400)
 
-        recorded, new_count = await self.ingest(devices)
+        # A sensor may self-identify; otherwise fall back to its source address.
+        sensor = body.get("sensor") if isinstance(body, dict) else None
+        sensor_id = str(sensor)[:64] if sensor else request.remote
+
+        recorded, new_count = await self.ingest(devices, sensor_id=sensor_id)
         return web.json_response({"recorded": recorded, "new": new_count})
 
     async def devices_list(self, request: web.Request) -> web.Response:
@@ -462,6 +511,32 @@ class WebServer:
             return datetime.fromisoformat(value).isoformat()
         except ValueError:
             return None
+
+    async def device_history(self, request: web.Request) -> web.Response:
+        """
+        Per-sighting timeline + patterns-of-life aggregates for one device.
+
+        ?since= / ?until= (ISO-8601) bound the raw points; the summary always
+        covers the last SUMMARY_WINDOW_DAYS.
+        """
+        mac = request.match_info["mac"]
+        now = datetime.now(timezone.utc)
+        since = self._iso_or_none(request.query.get("since")) \
+            or (now - timedelta(days=14)).isoformat(timespec="seconds")
+        until = self._iso_or_none(request.query.get("until"))
+
+        summary_since = (now - timedelta(days=SUMMARY_WINDOW_DAYS)).isoformat(timespec="seconds")
+        summary = await db.sighting_summary(mac, since=summary_since)
+        points = await db.list_sightings(mac, since=since, until=until, limit=3000)
+        # oldest-first is friendlier for plotting
+        points.reverse()
+
+        return web.json_response({
+            "mac": mac,
+            "summary": summary,
+            "summary_window_days": SUMMARY_WINDOW_DAYS,
+            "sightings": points,
+        })
 
     async def devices_set_group(self, request: web.Request) -> web.Response:
         """Assigns (or clears) a group for a set of devices. Body: {macs, group}."""
@@ -549,6 +624,20 @@ class WebServer:
             except asyncio.QueueFull:
                 pass
 
+    async def _prune_loop(self) -> None:
+        """Trims sighting history older than the configured retention, daily."""
+        while True:
+            try:
+                days = (await db.get_settings()).sightings_retention_days
+                cutoff = (datetime.now(timezone.utc)
+                          - timedelta(days=days)).isoformat(timespec="seconds")
+                deleted = await db.prune_sightings(cutoff)
+                if deleted:
+                    logger.info(f"Pruned {deleted} sighting(s) older than {days}d")
+            except Exception as ex:
+                logger.warning(f"Sighting prune failed: {ex!r}")
+            await asyncio.sleep(_PRUNE_INTERVAL_SECONDS)
+
     async def start(self) -> web.AppRunner:
         """Initializes the database and starts serving."""
         await db.init_db()
@@ -558,11 +647,19 @@ class WebServer:
         await self._runner.setup()
         site = web.TCPSite(self._runner, self.host, self.port)
         await site.start()
+        self._prune_task = asyncio.create_task(self._prune_loop())
         logger.info(f"Web dashboard available at: http://{self.host}:{self.port}")
         return self._runner
 
     async def stop(self) -> None:
         """Stops the web server."""
+        if self._prune_task:
+            self._prune_task.cancel()
+            try:
+                await self._prune_task
+            except asyncio.CancelledError:
+                pass
+            self._prune_task = None
         if self._runner:
             await self._runner.cleanup()
             self._runner = None

@@ -94,6 +94,8 @@
   table.devices td.group.none { color: var(--text-dim); }
   table.devices tr.isnew td { animation: flashrow 3s ease-out; }
   @keyframes flashrow { from { background: rgba(255,74,43,.15); } to { background: transparent; } }
+  table.devices a.devlink { color: inherit; text-decoration: none; }
+  table.devices a.devlink:hover { color: var(--blucifer); text-decoration: underline; }
 
   button.star {
     margin: 0; padding: 0 .15rem; border: 0; background: none; cursor: pointer;
@@ -314,14 +316,15 @@
       const flash = recentNew.has(dev.mac) ? "isnew" : "";
       const checked = selected.has(dev.mac) ? "checked" : "";
       const on = dev.watched ? "on" : "";
+      const href = `/devices/${encodeURIComponent(dev.mac)}`;
       return (
-        `<tr class="${flash}">` +
+        `<tr class="${flash}" data-mac="${esc(dev.mac)}">` +
           `<td class="check"><input class="rowcheck" type="checkbox" data-mac="${esc(dev.mac)}" ${checked}></td>` +
           `<td class="star"><button class="star ${on}" data-mac="${esc(dev.mac)}" title="${dev.watched ? "Unwatch" : "Watch"}">★</button></td>` +
           `<td>${classBadge(dev)}</td>` +
-          `<td class="addr">${esc(dev.mac)}<span class="at">${esc(dev.address_type || "")}</span></td>` +
+          `<td class="addr"><a class="devlink" href="${href}">${esc(dev.mac)}</a><span class="at">${esc(dev.address_type || "")}</span></td>` +
           vendorCell(dev) +
-          `<td class="name">${esc(dev.friendly_name || "")}</td>` +
+          `<td class="name"><a class="devlink" href="${href}">${esc(dev.friendly_name || "")}</a></td>` +
           `<td class="num">${dev.rssi ?? ""}</td>` +
           `<td class="num sightings">${dev.total_sightings ?? ""}</td>` +
           `<td class="seen${rt.now ? " now" : ""}">${rt.text}</td>` +
@@ -497,9 +500,8 @@
   rowsEl.addEventListener("click", (e) => {
     const star = e.target.closest("button.star");
     if (!star) return;
-    const mac = star.dataset.mac;
-    const d = devices.get(mac);
-    if (d) setWatch([mac], !d.watched).catch(() => {});
+    const d = devices.get(star.dataset.mac);
+    if (d) setWatch([star.dataset.mac], !d.watched).catch(() => {});
   });
 
   selectAllEl.addEventListener("change", () => {

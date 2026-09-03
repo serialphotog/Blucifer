@@ -7,8 +7,12 @@ from datetime import datetime, timezone
 
 from blucifer.bluetooth.classifier import classify_device
 from blucifer.bluetooth.models import ScannedBluetoothDevice
-from blucifer.config.config import DB_PATH
+from blucifer.config.config import DB_PATH, SIGHTINGS_RETENTION_DAYS
 from blucifer.db.models import BluciferSettings, Device
+
+# Bounds for the user-configurable sighting-history retention.
+RETENTION_MIN_DAYS = 1
+RETENTION_MAX_DAYS = 3650
 
 # The schema for the Blucifer database
 SCHEMA: str = """
@@ -34,13 +38,24 @@ CREATE TABLE IF NOT EXISTS devices (
     group_name      TEXT,
     notes           TEXT
 );
+
+-- One row per device per scan cycle: the raw timeline behind patterns of life.
+CREATE TABLE IF NOT EXISTS sightings (
+    id        INTEGER PRIMARY KEY,
+    mac       TEXT NOT NULL,
+    ts        TEXT NOT NULL,   -- ISO 8601 UTC
+    rssi      INTEGER,
+    sensor_id TEXT
+);
 """
 
 # Indexes are created after column migrations so they can reference columns
 # added to an older devices table.
-_DEVICE_INDEXES: list[str] = [
+_INDEXES: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_devices_last_seen ON devices(last_seen)",
     "CREATE INDEX IF NOT EXISTS idx_devices_group ON devices(group_name)",
+    "CREATE INDEX IF NOT EXISTS idx_sightings_mac_ts ON sightings(mac, ts)",
+    "CREATE INDEX IF NOT EXISTS idx_sightings_ts ON sightings(ts)",
 ]
 
 # Columns added to the devices table after its first release, applied on startup
@@ -107,9 +122,6 @@ async def _ensure_device_columns(conn: aiosqlite.Connection) -> None:
             logger.info(f"Migrating devices table: adding column {name}")
             await conn.execute(f"ALTER TABLE devices ADD COLUMN {name} {ddl}")
 
-    for stmt in _DEVICE_INDEXES:
-        await conn.execute(stmt)
-
 async def init_db() -> None:
     """Initializes the database schema."""
     async with _connect() as db:
@@ -117,6 +129,8 @@ async def init_db() -> None:
         # TODO: Possibly add an integrity check
         await db.executescript(SCHEMA)
         await _ensure_device_columns(db)
+        for stmt in _INDEXES:
+            await db.execute(stmt)
         await db.commit()
 
     _invalidate_settings_cache()
@@ -124,6 +138,9 @@ async def init_db() -> None:
 ########
 # Application Settings
 ########
+
+def _clamp_retention(days: int) -> int:
+    return max(RETENTION_MIN_DAYS, min(RETENTION_MAX_DAYS, days))
 
 async def _load_settings() -> BluciferSettings:
     """Reads the application settings straight from the database."""
@@ -133,12 +150,19 @@ async def _load_settings() -> BluciferSettings:
             rows = await cur.fetchall()
             settings = { row["key"]: row["value"] for row in rows }
 
+    try:
+        retention = _clamp_retention(int(settings["sightings_retention_days"]))
+    except (KeyError, ValueError, TypeError):
+        retention = SIGHTINGS_RETENTION_DAYS  # env default until set in the UI
+
     # Build the settings object
     return BluciferSettings(
         # Authentication
         auth_enabled=settings.get("auth_enabled", "0") == "1",
         auth_username=settings.get("auth_username"),
         auth_password_hash=settings.get("auth_password_hash"),
+        # Data retention
+        sightings_retention_days=retention,
     )
 
 async def get_settings() -> BluciferSettings:
@@ -176,6 +200,8 @@ async def update_settings(settings: BluciferSettings) -> None:
             ("auth_enabled", "1" if settings.auth_enabled else "0"),
             ("auth_username", "" if settings.auth_username is None else settings.auth_username),
             ("auth_password_hash", "" if settings.auth_password_hash is None else settings.auth_password_hash),
+            # Data retention
+            ("sightings_retention_days", str(_clamp_retention(settings.sightings_retention_days))),
         ]
 
         for key, value in setting_pairs:
@@ -214,20 +240,30 @@ def _row_to_device(row: aiosqlite.Row) -> Device:
 # SQLite version.
 _SELECT_CHUNK = 500
 
+async def get_device(mac: str) -> Device | None:
+    """Returns one stored device, or None."""
+    async with _connect() as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute("SELECT * FROM devices WHERE mac = ?", (mac,)) as cur:
+            row = await cur.fetchone()
+    return _row_to_device(row) if row else None
+
 async def record_devices(
     devices: list[ScannedBluetoothDevice],
+    sensor_id: str | None = None,
 ) -> list[tuple[Device, bool]]:
     """
-    Upserts a batch of freshly-scanned devices.
+    Upserts a batch of freshly-scanned devices and appends one sighting each.
 
     Reads all existing rows in one query, decides inserts vs. merges in Python,
-    then applies them with two ``executemany`` writes in a single transaction -
+    then applies them with a few ``executemany`` writes in a single transaction -
     so the write lock is held only for the flush, not per device.
 
     Returns (device, is_new) per distinct MAC (the last sighting of a MAC in the
     batch wins); is_new is True the first time a MAC has ever been seen. Existing
     rows keep their first_seen and bump total_sightings; volatile fields (rssi,
-    name, vendor, ...) are refreshed.
+    name, vendor, ...) are refreshed. Every distinct MAC also gets a row in
+    ``sightings`` stamped with ``now`` and ``sensor_id``.
     """
     if not devices:
         return []
@@ -356,9 +392,97 @@ async def record_devices(
                 """,
                 updates,
             )
+        await conn.executemany(
+            "INSERT INTO sightings (mac, ts, rssi, sensor_id) VALUES (?, ?, ?, ?)",
+            [(mac, now, d.rssi, sensor_id) for mac, d in by_mac.items()],
+        )
         await conn.commit()
 
     return results
+
+async def list_sightings(
+    mac: str,
+    since: str | None = None,
+    until: str | None = None,
+    limit: int = 5000,
+) -> list[dict]:
+    """Raw sighting timeline for one device, most recent first."""
+    clauses = ["mac = ?"]
+    params: list = [mac]
+    if since:
+        clauses.append("ts >= ?")
+        params.append(since)
+    if until:
+        clauses.append("ts <= ?")
+        params.append(until)
+    params.append(limit)
+
+    async with _connect() as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            f"SELECT ts, rssi, sensor_id FROM sightings "
+            f"WHERE {' AND '.join(clauses)} ORDER BY ts DESC LIMIT ?",
+            params,
+        ) as cur:
+            rows = await cur.fetchall()
+
+    return [{"ts": r["ts"], "rssi": r["rssi"], "sensor_id": r["sensor_id"]} for r in rows]
+
+async def sighting_summary(mac: str, since: str | None = None) -> dict:
+    """
+    Aggregates a device's sightings for a patterns-of-life view.
+
+    Returns totals plus counts bucketed by hour-of-day (24) and weekday
+    (0=Monday..6=Sunday), computed in Python so it works on any SQLite version.
+    """
+    async with _connect() as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            "SELECT COUNT(*) n, MIN(ts) first, MAX(ts) last FROM sightings WHERE mac = ?",
+            (mac,),
+        ) as cur:
+            agg = await cur.fetchone()
+
+        q = "SELECT ts FROM sightings WHERE mac = ?"
+        params: list = [mac]
+        if since:
+            q += " AND ts >= ?"
+            params.append(since)
+        async with conn.execute(q, params) as cur:
+            timestamps = [r["ts"] for r in await cur.fetchall()]
+
+    by_hour = [0] * 24
+    by_dow = [0] * 7
+    by_dow_hour = [[0] * 24 for _ in range(7)]  # [weekday][hour], 0=Monday
+    by_day: dict[str, int] = {}
+    for ts in timestamps:
+        try:
+            dt = datetime.fromisoformat(ts)
+        except ValueError:
+            continue
+        by_hour[dt.hour] += 1
+        by_dow[dt.weekday()] += 1
+        by_dow_hour[dt.weekday()][dt.hour] += 1
+        day = dt.date().isoformat()
+        by_day[day] = by_day.get(day, 0) + 1
+
+    return {
+        "total": agg["n"] if agg else 0,
+        "first_seen": agg["first"] if agg else None,
+        "last_seen": agg["last"] if agg else None,
+        "window_total": len(timestamps),
+        "by_hour": by_hour,
+        "by_dow": by_dow,
+        "by_dow_hour": by_dow_hour,
+        "by_day": by_day,
+    }
+
+async def prune_sightings(older_than: str) -> int:
+    """Deletes sightings with ts strictly before the given ISO-8601 timestamp."""
+    async with _connect() as conn:
+        cur = await conn.execute("DELETE FROM sightings WHERE ts < ?", (older_than,))
+        await conn.commit()
+        return cur.rowcount
 
 async def list_devices(
     limit: int = 1000,

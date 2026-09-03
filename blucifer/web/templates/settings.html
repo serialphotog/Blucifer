@@ -30,6 +30,17 @@
       password fields blank to keep the current one.
     </p>
 
+    <h2>Data Retention</h2>
+
+    <label for="sightings_retention_days">Keep per-sighting history for (days)</label>
+    <input type="number" id="sightings_retention_days" name="sightings_retention_days"
+           value="{{ retention_days }}" min="{{ retention_min }}" max="{{ retention_max }}" step="1">
+
+    <p class="muted">
+      Each device is logged once per scan cycle. Older sighting rows are pruned
+      daily; device records themselves are kept. Range {{ retention_min }}–{{ retention_max }} days.
+    </p>
+
     <button type="submit">Save settings</button>
   </form>
 {% endblock %}

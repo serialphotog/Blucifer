@@ -1,0 +1,193 @@
+{% extends "base.html" %}
+{% block title %}{{ device.friendly_name or device.mac }} — Blucifer{% endblock %}
+
+{% block head %}
+<style>
+  .crumb { font-size: .8rem; margin-bottom: 1rem; }
+  .crumb a { color: var(--text-dim); }
+  .crumb a:hover { color: var(--text); }
+  .idrow { display: flex; align-items: baseline; gap: .75rem; flex-wrap: wrap; }
+  .idrow .mac { font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--text-bright); font-size: 1.05rem; }
+  .tag { font-size: .62rem; text-transform: uppercase; letter-spacing: .1em;
+         padding: .12rem .45rem; border: 1px solid var(--border-bright); color: var(--text-dim); }
+  h1 { margin: .5rem 0 0; }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+           gap: .75rem; margin: 1.25rem 0; }
+  .card { border: 1px solid var(--border); border-left: 2px solid var(--border-bright);
+          padding: .55rem .75rem; background: var(--panel); }
+  .card .k { display: block; font-size: .6rem; text-transform: uppercase; letter-spacing: .12em;
+             color: var(--text-dim); margin-bottom: .15rem; }
+  .card .v { color: var(--text-bright); }
+
+  .actions { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; margin-bottom: 1.5rem; }
+  .actions form { margin: 0; display: flex; gap: .5rem; }
+  .actions input { width: 12rem; padding: .38rem .55rem; }
+  .actions button { margin: 0; padding: .42rem .95rem; }
+  .actions button.on { color: var(--ember); border-color: color-mix(in srgb, var(--ember) 55%, var(--border-bright)); }
+
+  .panels { display: flex; flex-wrap: wrap; gap: 2.5rem; align-items: flex-start; }
+  .panels h3, .sectitle { font-size: .66rem; letter-spacing: .14em; text-transform: uppercase;
+                          color: var(--text-dim); margin: 0 0 .6rem; }
+  .grid { display: grid; grid-template-columns: 2rem repeat(24, 1fr); gap: 1px; max-width: 40rem; }
+  .grid .h, .grid .d { font-size: .56rem; color: var(--text-dim); text-align: center; }
+  .grid .d { text-align: right; padding-right: .3rem; line-height: .8rem; }
+  .grid .cell { aspect-ratio: 1; background: var(--blucifer); border-radius: 1px; }
+  .spark { display: block; }
+  .spark path { fill: none; stroke: var(--ember); stroke-width: 1.5; }
+  .sensors { padding: 0; margin: 0; font-size: .85rem; list-style: none; line-height: 1.9; }
+  .recent { border-collapse: collapse; font-size: .8rem; width: 100%; max-width: 34rem; }
+  .recent th, .recent td { text-align: left; padding: .3rem .6rem; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  .recent th { color: var(--text-dim); font-size: .6rem; text-transform: uppercase; letter-spacing: .1em; }
+  .muted { color: var(--text-dim); }
+  .uuids { color: var(--text-dim); font-size: .82rem; word-break: break-all; }
+</style>
+{% endblock %}
+
+{% block content %}
+  <p class="crumb"><a href="/">← All devices</a></p>
+
+  <div class="idrow">
+    <span class="mac">{{ device.mac }}</span>
+    <span class="tag">{{ device.class_label }}</span>
+    <span class="tag">{{ device.address_type }}</span>
+    {% if device.bt_type %}<span class="tag">{{ device.bt_type }}</span>{% endif %}
+  </div>
+  <h1>{{ device.friendly_name or "Unnamed device" }}</h1>
+
+  <div class="cards">
+    <div class="card"><span class="k">Vendor</span><span class="v">{{ device.vendor or "—" }}</span></div>
+    <div class="card"><span class="k">Sightings</span><span class="v">{{ device.total_sightings }}</span></div>
+    <div class="card"><span class="k">Last RSSI</span><span class="v">{{ device.rssi if device.rssi is not none else "—" }}</span></div>
+    <div class="card"><span class="k">First seen</span><span class="v" data-abs="{{ device.first_seen or '' }}">{{ device.first_seen or "—" }}</span></div>
+    <div class="card"><span class="k">Last seen</span><span class="v" data-abs="{{ device.last_seen or '' }}">{{ device.last_seen or "—" }}</span></div>
+    <div class="card"><span class="k">Group</span><span class="v">{{ device.group_name or "—" }}</span></div>
+  </div>
+
+  <div class="actions">
+    <button id="watch" class="{{ 'on' if device.watched else '' }}"
+            data-watched="{{ '1' if device.watched else '' }}">
+      {{ "Unwatch" if device.watched else "Watch" }}
+    </button>
+    <form id="groupform">
+      <input id="groupinput" type="text" placeholder="group name…" value="{{ device.group_name or '' }}" autocomplete="off">
+      <button type="submit">Set group</button>
+    </form>
+  </div>
+
+  {% if device.service_uuids %}
+  <p class="uuids"><span class="sectitle" style="display:inline">Advertised services</span><br>
+    {{ device.service_uuids | join(", ") }}</p>
+  {% endif %}
+
+  <div class="panels">
+    <div>
+      <h3>Presence by weekday &amp; hour</h3>
+      <div id="polgrid"><p class="muted">Loading…</p></div>
+    </div>
+    <div>
+      <h3>RSSI over recent sightings</h3>
+      <div id="polspark"><p class="muted">Loading…</p></div>
+      <h3 style="margin-top:1.5rem">Seen by</h3>
+      <ul class="sensors" id="polsensors"><li class="muted">Loading…</li></ul>
+    </div>
+  </div>
+
+  <h3 class="sectitle" style="margin:2rem 0 .6rem">Recent sightings</h3>
+  <div id="polrecent"><p class="muted">Loading…</p></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const MAC = {{ device.mac | tojson }};
+  const CSRF = document.querySelector('meta[name="csrf-token"]').content;
+  const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  // localize the ISO timestamps rendered server-side
+  for (const el of document.querySelectorAll("[data-abs]")) {
+    const v = el.getAttribute("data-abs");
+    if (v) { const d = new Date(v); if (!isNaN(d.getTime())) el.textContent = d.toLocaleString(); }
+  }
+
+  async function post(url, body) {
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": CSRF },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error(r.status);
+    return r.json();
+  }
+
+  document.getElementById("watch").addEventListener("click", (e) => {
+    const want = !e.currentTarget.dataset.watched;
+    post("/api/devices/watch", { macs: [MAC], watched: want })
+      .then(() => location.reload()).catch(() => {});
+  });
+  document.getElementById("groupform").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const g = document.getElementById("groupinput").value.trim();
+    post("/api/devices/group", { macs: [MAC], group: g || null })
+      .then(() => location.reload()).catch(() => {});
+  });
+
+  function polGrid(matrix) {
+    let max = 1;
+    for (const row of matrix) for (const v of row) if (v > max) max = v;
+    let cells = `<div class="h"></div>`;
+    for (let h = 0; h < 24; h++) cells += `<div class="h">${h % 6 === 0 ? h : ""}</div>`;
+    for (let d = 0; d < 7; d++) {
+      cells += `<div class="d">${DOW[d]}</div>`;
+      for (let h = 0; h < 24; h++) {
+        const v = (matrix[d] && matrix[d][h]) || 0;
+        const op = v ? (0.15 + 0.85 * (v / max)).toFixed(3) : 0;
+        cells += `<div class="cell" style="opacity:${op}" title="${DOW[d]} ${h}:00 — ${v}"></div>`;
+      }
+    }
+    return `<div class="grid">${cells}</div>`;
+  }
+
+  function spark(points) {
+    const vals = points.map((p) => p.rssi).filter((r) => typeof r === "number");
+    if (vals.length < 2) return `<p class="muted">Not enough RSSI samples yet.</p>`;
+    const W = 340, H = 48, lo = -100, hi = -30;
+    const y = (r) => H - ((Math.max(lo, Math.min(hi, r)) - lo) / (hi - lo)) * H;
+    const d = vals.map((r, i) => `${i ? "L" : "M"}${(i / (vals.length - 1) * W).toFixed(1)},${y(r).toFixed(1)}`).join(" ");
+    return `<svg class="spark" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><path d="${d}"/></svg>`;
+  }
+
+  function sensorList(points) {
+    const c = {};
+    for (const p of points) { const s = p.sensor_id || "unknown"; c[s] = (c[s] || 0) + 1; }
+    const ks = Object.keys(c).sort((a, b) => c[b] - c[a]);
+    if (!ks.length) return `<li class="muted">—</li>`;
+    return ks.map((k) => `<li>${esc(k)} <span class="muted">— ${c[k]}</span></li>`).join("");
+  }
+
+  function recentTable(points) {
+    if (!points.length) return `<p class="muted">No sightings recorded.</p>`;
+    const rows = points.slice(-80).reverse().map((p) =>
+      `<tr><td>${esc(new Date(p.ts).toLocaleString())}</td><td>${p.rssi ?? ""}</td><td>${esc(p.sensor_id || "")}</td></tr>`
+    ).join("");
+    return `<table class="recent"><thead><tr><th>When</th><th>RSSI</th><th>Sensor</th></tr></thead><tbody>${rows}</tbody></table>`;
+  }
+
+  fetch(`/api/devices/${encodeURIComponent(MAC)}/history`)
+    .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+    .then((h) => {
+      document.getElementById("polgrid").innerHTML = polGrid(h.summary.by_dow_hour);
+      document.getElementById("polspark").innerHTML = spark(h.sightings);
+      document.getElementById("polsensors").innerHTML = sensorList(h.sightings);
+      document.getElementById("polrecent").innerHTML = recentTable(h.sightings);
+    })
+    .catch(() => {
+      for (const id of ["polgrid", "polspark", "polsensors", "polrecent"]) {
+        document.getElementById(id).innerHTML = `<p class="muted">Could not load history.</p>`;
+      }
+    });
+})();
+</script>
+{% endblock %}
