@@ -210,34 +210,57 @@ def _row_to_device(row: aiosqlite.Row) -> Device:
         notes=row["notes"],
     )
 
+# Keep "WHERE mac IN (...)" comfortably under SQLITE_MAX_VARIABLE_NUMBER on any
+# SQLite version.
+_SELECT_CHUNK = 500
+
 async def record_devices(
     devices: list[ScannedBluetoothDevice],
 ) -> list[tuple[Device, bool]]:
     """
-    Upserts a batch of freshly-scanned devices in a single transaction.
+    Upserts a batch of freshly-scanned devices.
 
-    Returns (device, is_new) for each input, in order, where is_new is True the
-    first time a MAC has ever been seen. Existing rows keep their first_seen and
-    bump total_sightings; volatile fields (rssi, name, vendor, ...) are refreshed.
+    Reads all existing rows in one query, decides inserts vs. merges in Python,
+    then applies them with two ``executemany`` writes in a single transaction -
+    so the write lock is held only for the flush, not per device.
+
+    Returns (device, is_new) per distinct MAC (the last sighting of a MAC in the
+    batch wins); is_new is True the first time a MAC has ever been seen. Existing
+    rows keep their first_seen and bump total_sightings; volatile fields (rssi,
+    name, vendor, ...) are refreshed.
     """
     if not devices:
         return []
 
+    # Collapse duplicate MACs within the batch - last sighting wins.
+    by_mac: dict[str, ScannedBluetoothDevice] = {d.mac: d for d in devices}
+    macs = list(by_mac)
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    results: list[tuple[Device, bool]] = []
 
     async with _connect() as conn:
         conn.row_factory = aiosqlite.Row
 
-        for scanned in devices:
+        # --- one bulk read of everything we might touch ---
+        existing: dict[str, aiosqlite.Row] = {}
+        for i in range(0, len(macs), _SELECT_CHUNK):
+            chunk = macs[i:i + _SELECT_CHUNK]
+            placeholders = ",".join("?" * len(chunk))
             async with conn.execute(
-                "SELECT * FROM devices WHERE mac = ?", (scanned.mac,)
+                f"SELECT * FROM devices WHERE mac IN ({placeholders})", chunk
             ) as cur:
-                existing = await cur.fetchone()
+                async for row in cur:
+                    existing[row["mac"]] = row
 
+        # --- decide everything in Python, no DB calls in this loop ---
+        inserts: list[tuple] = []
+        updates: list[tuple] = []
+        results: list[tuple[Device, bool]] = []
+
+        for mac, scanned in by_mac.items():
             uuids = list(scanned.service_uuids or [])
+            row = existing.get(mac)
 
-            if existing is None:
+            if row is None:
                 device_type = classify_device(
                     name=scanned.name,
                     vendor=scanned.vendor,
@@ -246,20 +269,14 @@ async def record_devices(
                     manufacturer_data=scanned.manufacturer_data,
                     service_data=scanned.service_data,
                 )
-                await conn.execute(
-                    """
-                    INSERT INTO devices
-                        (mac, vendor, friendly_name, device_type, first_seen, last_seen,
-                         total_sightings, service_uuids, bt_type, device_class, rssi)
-                    VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
-                    """,
-                    (scanned.mac, scanned.vendor, scanned.name, device_type, now, now,
-                     json.dumps(uuids), scanned.bt_type, scanned.device_class,
-                     scanned.rssi),
-                )
+                inserts.append((
+                    mac, scanned.vendor, scanned.name, device_type, now, now,
+                    json.dumps(uuids), scanned.bt_type, scanned.device_class,
+                    scanned.rssi,
+                ))
                 results.append((
                     Device(
-                        mac=scanned.mac,
+                        mac=mac,
                         vendor=scanned.vendor,
                         friendly_name=scanned.name,
                         device_type=device_type,
@@ -276,15 +293,15 @@ async def record_devices(
                 continue
 
             # Merge onto the existing row.
-            vendor = scanned.vendor or existing["vendor"]
-            friendly_name = scanned.name or existing["friendly_name"]
+            vendor = scanned.vendor or row["vendor"]
+            friendly_name = scanned.name or row["friendly_name"]
             device_class = (
                 scanned.device_class
                 if scanned.device_class is not None
-                else existing["device_class"]
+                else row["device_class"]
             )
-            merged_uuids = uuids or json.loads(existing["service_uuids"] or "[]")
-            total = existing["total_sightings"] + 1
+            merged_uuids = uuids or json.loads(row["service_uuids"] or "[]")
+            total = row["total_sightings"] + 1
 
             # Re-classify each sighting - name / vendor / UUIDs may have improved.
             device_type = classify_device(
@@ -295,22 +312,16 @@ async def record_devices(
                 manufacturer_data=scanned.manufacturer_data,
                 service_data=scanned.service_data,
             )
-            if device_type == "unknown" and existing["device_type"]:
-                device_type = existing["device_type"]
+            if device_type == "unknown" and row["device_type"]:
+                device_type = row["device_type"]
 
-            await conn.execute(
-                """
-                UPDATE devices
-                   SET vendor = ?, friendly_name = ?, device_type = ?, last_seen = ?,
-                       total_sightings = ?, service_uuids = ?, bt_type = ?,
-                       device_class = ?, rssi = ?
-                 WHERE mac = ?
-                """,
-                (vendor, friendly_name, device_type, now, total, json.dumps(merged_uuids),
-                 scanned.bt_type, device_class, scanned.rssi, scanned.mac),
-            )
+            updates.append((
+                vendor, friendly_name, device_type, now, total,
+                json.dumps(merged_uuids), scanned.bt_type, device_class,
+                scanned.rssi, mac,
+            ))
 
-            merged = _row_to_device(existing)
+            merged = _row_to_device(row)
             merged.vendor = vendor
             merged.friendly_name = friendly_name
             merged.device_type = device_type
@@ -322,6 +333,29 @@ async def record_devices(
             merged.rssi = scanned.rssi
             results.append((merged, False))
 
+        # --- two bulk writes, one commit ---
+        if inserts:
+            await conn.executemany(
+                """
+                INSERT INTO devices
+                    (mac, vendor, friendly_name, device_type, first_seen, last_seen,
+                     total_sightings, service_uuids, bt_type, device_class, rssi)
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+                ON CONFLICT(mac) DO NOTHING
+                """,
+                inserts,
+            )
+        if updates:
+            await conn.executemany(
+                """
+                UPDATE devices
+                   SET vendor = ?, friendly_name = ?, device_type = ?, last_seen = ?,
+                       total_sightings = ?, service_uuids = ?, bt_type = ?,
+                       device_class = ?, rssi = ?
+                 WHERE mac = ?
+                """,
+                updates,
+            )
         await conn.commit()
 
     return results
