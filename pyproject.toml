@@ -69,7 +69,7 @@ Homepage = "https://hackeradam.com"
 blucifer = "blucifer.__main__:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/blucifer"]
+packages = ["blucifer"]
 
 [tool.ruff]
 target-version = "py310"
