@@ -234,7 +234,10 @@ class WebServer:
     async def index(self, request: web.Request) -> dict:
         """Serves the main (index) page."""
         settings = await db.get_settings()
-        return {"auth_enabled": settings.auth_enabled}
+        return {
+            "auth_enabled": settings.auth_enabled,
+            "visit_gap_seconds": settings.visit_gap_seconds,
+        }
 
     async def device_page(self, request: web.Request) -> web.Response:
         """Full detail page for a single device."""
@@ -283,6 +286,9 @@ class WebServer:
             "retention_days": form.get("sightings_retention_days") or settings.sightings_retention_days,
             "retention_min": db.RETENTION_MIN_DAYS,
             "retention_max": db.RETENTION_MAX_DAYS,
+            "visit_gap_seconds": form.get("visit_gap_seconds") or settings.visit_gap_seconds,
+            "visit_gap_min": db.VISIT_GAP_MIN_SECONDS,
+            "visit_gap_max": db.VISIT_GAP_MAX_SECONDS,
             "message": message,
             "error": error,
         }
@@ -357,6 +363,21 @@ class WebServer:
                           f"{db.RETENTION_MAX_DAYS} days.",
                     status=400)
 
+        visit_gap = current.visit_gap_seconds
+        raw_visit_gap = form.get("visit_gap_seconds")
+        if raw_visit_gap not in (None, ""):
+            try:
+                visit_gap = int(str(raw_visit_gap))
+            except ValueError:
+                return await self._render_settings(
+                    request, error="Visit gap must be a whole number of seconds.", status=400)
+            if not (db.VISIT_GAP_MIN_SECONDS <= visit_gap <= db.VISIT_GAP_MAX_SECONDS):
+                return await self._render_settings(
+                    request,
+                    error=f"Visit gap must be between {db.VISIT_GAP_MIN_SECONDS} and "
+                          f"{db.VISIT_GAP_MAX_SECONDS} seconds.",
+                    status=400)
+
         password_hash = current.auth_password_hash
 
         # A password change is optional - only act if either field was filled.
@@ -385,10 +406,11 @@ class WebServer:
             auth_username=username or None,
             auth_password_hash=password_hash,
             sightings_retention_days=retention,
+            visit_gap_seconds=visit_gap,
         ))
         logger.info(
             f"Settings updated (auth_enabled={auth_enabled}, "
-            f"retention={retention}d)"
+            f"retention={retention}d, visit_gap={visit_gap}s)"
         )
 
         # Post/redirect/get. If auth was just turned on, hand the caller a
@@ -547,12 +569,22 @@ class WebServer:
         except ValueError:
             return None
 
+    @staticmethod
+    def _clamped_int(value: str | None, default: int, lo: int, hi: int) -> int:
+        """Parses an int query param, falling back to default, clamped to [lo, hi]."""
+        try:
+            n = int(str(value))
+        except (TypeError, ValueError):
+            return default
+        return max(lo, min(hi, n))
+
     async def device_history(self, request: web.Request) -> web.Response:
         """
         Per-sighting timeline + patterns-of-life aggregates for one device.
 
-        ?since= / ?until= (ISO-8601) bound the raw points; the summary always
-        covers the last SUMMARY_WINDOW_DAYS.
+        ?since= / ?until= (ISO-8601) bound the raw points; the summary and the
+        visit segmentation always cover the last SUMMARY_WINDOW_DAYS. ?gap=
+        (seconds) overrides the configured visit idle-gap for this request.
         """
         mac = request.match_info["mac"]
         now = datetime.now(timezone.utc)
@@ -566,11 +598,19 @@ class WebServer:
         # oldest-first is friendlier for plotting
         points.reverse()
 
+        settings = await db.get_settings()
+        gap = self._clamped_int(request.query.get("gap"), settings.visit_gap_seconds,
+                                db.VISIT_GAP_MIN_SECONDS, db.VISIT_GAP_MAX_SECONDS)
+        visits = await db.device_visits(mac, gap_seconds=gap, since=summary_since)
+
         return web.json_response({
             "mac": mac,
             "summary": summary,
             "summary_window_days": SUMMARY_WINDOW_DAYS,
             "sightings": points,
+            "visits": visits["visits"],
+            "visits_summary": visits["summary"],
+            "visit_gap_seconds": gap,
         })
 
     async def devices_set_group(self, request: web.Request) -> web.Response:

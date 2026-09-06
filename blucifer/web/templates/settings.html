@@ -41,6 +41,19 @@
       daily; device records themselves are kept. Range {{ retention_min }}–{{ retention_max }} days.
     </p>
 
+    <h2>Presence</h2>
+
+    <label for="visit_gap_seconds">Start a new visit after a gap of (seconds)</label>
+    <input type="number" id="visit_gap_seconds" name="visit_gap_seconds"
+           value="{{ visit_gap_seconds }}" min="{{ visit_gap_min }}"
+           max="{{ visit_gap_max }}" step="1">
+
+    <p class="muted">
+      Consecutive sightings no further apart than this count as one visit on a
+      device's page. Lower means more, shorter visits. Range
+      {{ visit_gap_min }}–{{ visit_gap_max }} seconds.
+    </p>
+
     <button type="submit">Save settings</button>
   </form>
 {% endblock %}

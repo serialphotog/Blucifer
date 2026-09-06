@@ -5,14 +5,19 @@ import logging
 
 from datetime import datetime, timezone
 
+from blucifer.analytics.visits import segment_visits, visits_summary
 from blucifer.bluetooth.classifier import classify_device
 from blucifer.bluetooth.models import ScannedBluetoothDevice
-from blucifer.config.config import DB_PATH, SIGHTINGS_RETENTION_DAYS
+from blucifer.config.config import DB_PATH, SIGHTINGS_RETENTION_DAYS, VISIT_GAP_SECONDS
 from blucifer.db.models import BluciferSettings, Device
 
 # Bounds for the user-configurable sighting-history retention.
 RETENTION_MIN_DAYS = 1
 RETENTION_MAX_DAYS = 3650
+
+# Bounds for the user-configurable visit idle-gap (seconds): one minute to a day.
+VISIT_GAP_MIN_SECONDS = 60
+VISIT_GAP_MAX_SECONDS = 86400
 
 # The schema for the Blucifer database
 SCHEMA: str = """
@@ -142,6 +147,9 @@ async def init_db() -> None:
 def _clamp_retention(days: int) -> int:
     return max(RETENTION_MIN_DAYS, min(RETENTION_MAX_DAYS, days))
 
+def _clamp_visit_gap(seconds: int) -> int:
+    return max(VISIT_GAP_MIN_SECONDS, min(VISIT_GAP_MAX_SECONDS, seconds))
+
 async def _load_settings() -> BluciferSettings:
     """Reads the application settings straight from the database."""
     async with _connect() as db:
@@ -155,6 +163,11 @@ async def _load_settings() -> BluciferSettings:
     except (KeyError, ValueError, TypeError):
         retention = SIGHTINGS_RETENTION_DAYS  # env default until set in the UI
 
+    try:
+        visit_gap = _clamp_visit_gap(int(settings["visit_gap_seconds"]))
+    except (KeyError, ValueError, TypeError):
+        visit_gap = VISIT_GAP_SECONDS  # env default until set in the UI
+
     # Build the settings object
     return BluciferSettings(
         # Authentication
@@ -163,6 +176,8 @@ async def _load_settings() -> BluciferSettings:
         auth_password_hash=settings.get("auth_password_hash"),
         # Data retention
         sightings_retention_days=retention,
+        # Presence / visits
+        visit_gap_seconds=visit_gap,
     )
 
 async def get_settings() -> BluciferSettings:
@@ -202,6 +217,8 @@ async def update_settings(settings: BluciferSettings) -> None:
             ("auth_password_hash", "" if settings.auth_password_hash is None else settings.auth_password_hash),
             # Data retention
             ("sightings_retention_days", str(_clamp_retention(settings.sightings_retention_days))),
+            # Presence / visits
+            ("visit_gap_seconds", str(_clamp_visit_gap(settings.visit_gap_seconds))),
         ]
 
         for key, value in setting_pairs:
@@ -475,6 +492,44 @@ async def sighting_summary(mac: str, since: str | None = None) -> dict:
         "by_dow": by_dow,
         "by_dow_hour": by_dow_hour,
         "by_day": by_day,
+    }
+
+async def device_visits(
+    mac: str,
+    gap_seconds: int,
+    since: str | None = None,
+) -> dict:
+    """
+    Presence 'visits' for one device plus window aggregates.
+
+    A visit is a maximal run of sightings whose successive gaps are
+    <= ``gap_seconds``. Segmentation and the summary are delegated to
+    ``blucifer.analytics.visits`` so that logic stays unit-testable without a
+    database. Returns ``{"gap_seconds", "visits": [...], "summary": {...}}``.
+    """
+    clauses = ["mac = ?"]
+    params: list = [mac]
+    if since:
+        clauses.append("ts >= ?")
+        params.append(since)
+
+    async with _connect() as conn:
+        conn.row_factory = aiosqlite.Row
+        async with conn.execute(
+            f"SELECT ts, rssi, sensor_id FROM sightings "
+            f"WHERE {' AND '.join(clauses)} ORDER BY ts ASC",
+            params,
+        ) as cur:
+            rows = [
+                {"ts": r["ts"], "rssi": r["rssi"], "sensor_id": r["sensor_id"]}
+                for r in await cur.fetchall()
+            ]
+
+    visits = segment_visits(rows, gap_seconds)
+    return {
+        "gap_seconds": gap_seconds,
+        "visits": visits,
+        "summary": visits_summary(visits, gap_seconds),
     }
 
 async def prune_sightings(older_than: str) -> int:

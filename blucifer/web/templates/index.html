@@ -88,6 +88,9 @@
   table.devices th.star, table.devices td.star { padding-left: .35rem; padding-right: .35rem; width: 1px; }
   table.devices td.addr { color: var(--text-bright); }
   table.devices td.addr .at { color: var(--text-dim); font-size: .82em; margin-left: .5rem; }
+  .pdot { display: inline-block; width: .5em; height: .5em; border-radius: 50%;
+    background: var(--border-bright); margin-right: .5em; vertical-align: middle; }
+  .pdot.on { background: var(--green); box-shadow: 0 0 6px var(--green); }
   table.devices th.num, table.devices td.num { text-align: right; font-variant-numeric: tabular-nums; }
   table.devices td.name { width: 99%; white-space: normal; }
   table.devices td.sightings { color: var(--orange); }
@@ -227,6 +230,12 @@
   const groupInputEl = document.getElementById("groupinput");
   const groupListEl = document.getElementById("grouplist");
 
+  // A device counts as "present now" if its last sighting is within the
+  // configured visit idle-gap (same threshold the device page uses for visits).
+  const VISIT_GAP_MS = {{ visit_gap_seconds | default(900) }} * 1000;
+  const present = (dev) =>
+    !!dev.last_seen && (Date.now() - new Date(dev.last_seen).getTime()) <= VISIT_GAP_MS;
+
   const devices = new Map();          // mac -> device
   const newThisSession = new Set();   // macs first seen while this page is open
   const recentNew = new Map();        // mac -> timestamp, for the row flash
@@ -296,6 +305,7 @@
 
     const f = activeFilter;
     if (f === "watched") { if (!dev.watched) return false; }
+    else if (f === "present") { if (!present(dev)) return false; }
     else if (f.startsWith("group:")) { if ((dev.group_name || "") !== f.slice(6)) return false; }
     else if (f.startsWith("sensor:")) { if ((dev.last_sensor || "") !== f.slice(7)) return false; }
     else if (f === "unknown") { if (classKey(dev) !== "unknown") return false; }
@@ -332,7 +342,7 @@
           `<td class="check"><input class="rowcheck" type="checkbox" data-mac="${esc(dev.mac)}" ${checked}></td>` +
           `<td class="star"><button class="star ${on}" data-mac="${esc(dev.mac)}" title="${dev.watched ? "Unwatch" : "Watch"}">★</button></td>` +
           `<td>${classBadge(dev)}</td>` +
-          `<td class="addr"><a class="devlink" href="${href}">${esc(dev.mac)}</a><span class="at">${esc(dev.address_type || "")}</span></td>` +
+          `<td class="addr"><span class="pdot${present(dev) ? " on" : ""}" title="${present(dev) ? "Present now" : "Not seen recently"}"></span><a class="devlink" href="${href}">${esc(dev.mac)}</a><span class="at">${esc(dev.address_type || "")}</span></td>` +
           vendorCell(dev) +
           `<td class="name"><a class="devlink" href="${href}">${esc(dev.friendly_name || "")}</a></td>` +
           `<td class="num">${dev.rssi ?? ""}</td>` +
@@ -384,6 +394,7 @@
     const all = [...devices.values()];
     const watched = all.filter((d) => d.watched).length;
     let html = filterEntry("watched", "★ Watched", watched, false);
+    html += filterEntry("present", "● Present now", all.filter(present).length, false);
     for (const g of groupNames()) {
       html += filterEntry("group:" + g, g, all.filter((d) => (d.group_name || "") === g).length, false);
     }

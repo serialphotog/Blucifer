@@ -42,6 +42,12 @@
   .muted { color: var(--text-dim); }
   .uuids { color: var(--text-dim); font-size: .82rem; word-break: break-all; }
 
+  .pill { font-size: .62rem; text-transform: uppercase; letter-spacing: .1em;
+          padding: .12rem .5rem; border: 1px solid var(--border-bright); color: var(--text-dim); }
+  .pill.present { color: var(--ember);
+                  border-color: color-mix(in srgb, var(--ember) 55%, var(--border-bright)); }
+  .recent td.dur { font-variant-numeric: tabular-nums; }
+
   .notes { margin-bottom: 1.75rem; max-width: 40rem; }
   .notes textarea { width: 100%; min-height: 5rem; padding: .5rem .6rem; resize: vertical;
                     font: inherit; box-sizing: border-box; }
@@ -108,6 +114,10 @@
       <ul class="sensors" id="polsensors"><li class="muted">Loading…</li></ul>
     </div>
   </div>
+
+  <h3 class="sectitle" style="margin:2rem 0 .6rem">Visits</h3>
+  <div id="polvisitcards"><p class="muted">Loading…</p></div>
+  <div id="polvisits"><p class="muted">Loading…</p></div>
 
   <h3 class="sectitle" style="margin:2rem 0 .6rem">Recent sightings</h3>
   <div id="polrecent"><p class="muted">Loading…</p></div>
@@ -211,6 +221,49 @@
     return `<table class="recent"><thead><tr><th>When</th><th>RSSI</th><th>Sensor</th></tr></thead><tbody>${rows}</tbody></table>`;
   }
 
+  function humanizeDuration(s) {
+    s = Math.max(0, Math.round(s || 0));
+    if (s < 60) return "<1 min";
+    if (s < 3600) return `${Math.round(s / 60)} min`;
+    if (s < 86400) return `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m`;
+    return `${Math.floor(s / 86400)}d ${Math.round((s % 86400) / 3600)}h`;
+  }
+
+  function fmtWhen(iso) {
+    const d = new Date(iso);
+    return isNaN(d.getTime()) ? "—" : d.toLocaleString();
+  }
+
+  function visitCards(vs) {
+    const presence = vs.currently_present
+      ? `<span class="pill present">● Present</span> ` +
+        `<span class="v">for ${esc(humanizeDuration(vs.active_visit ? vs.active_visit.duration_s : 0))}</span>`
+      : `<span class="pill">○ Away</span> ` +
+        `<span class="v">${vs.last_visit_end ? "last seen " + esc(fmtWhen(vs.last_visit_end)) : "never seen"}</span>`;
+    const card = (k, v) => `<div class="card"><span class="k">${k}</span><span class="v">${v}</span></div>`;
+    return `<div class="cards">` +
+      `<div class="card"><span class="k">Presence</span><span class="v">${presence}</span></div>` +
+      card("Visits (30d)", vs.count) +
+      card("Median dwell", esc(humanizeDuration(vs.median_dwell_s))) +
+      card("Longest dwell", esc(humanizeDuration(vs.longest_dwell_s))) +
+      card("Visits / day", (vs.visits_per_day || 0).toFixed(1)) +
+    `</div>`;
+  }
+
+  function visitsTable(visits) {
+    if (!visits.length) return `<p class="muted">No visits in the last 30 days.</p>`;
+    const rows = visits.slice(-60).reverse().map((v) => {
+      const dur = v.sighting_count === 1 ? "single sighting" : humanizeDuration(v.duration_s);
+      const sensors = esc((v.sensors || []).join(", ") || "—") + (v.sensor_count > 1 ? ` (${v.sensor_count})` : "");
+      const rssi = v.rssi_min == null ? "—" : `${v.rssi_min}…${v.rssi_max}`;
+      return `<tr><td>${esc(fmtWhen(v.start))}</td><td>${esc(fmtWhen(v.end))}</td>` +
+             `<td class="dur">${esc(dur)}</td><td>${v.sighting_count}</td>` +
+             `<td>${sensors}</td><td>${rssi}</td></tr>`;
+    }).join("");
+    return `<table class="recent"><thead><tr><th>Arrived</th><th>Left</th><th>Duration</th>` +
+           `<th>Sightings</th><th>Sensor(s)</th><th>RSSI</th></tr></thead><tbody>${rows}</tbody></table>`;
+  }
+
   fetch(`/api/devices/${encodeURIComponent(MAC)}/history`)
     .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
     .then((h) => {
@@ -218,9 +271,11 @@
       document.getElementById("polspark").innerHTML = spark(h.sightings);
       document.getElementById("polsensors").innerHTML = sensorList(h.sightings);
       document.getElementById("polrecent").innerHTML = recentTable(h.sightings);
+      document.getElementById("polvisitcards").innerHTML = visitCards(h.visits_summary);
+      document.getElementById("polvisits").innerHTML = visitsTable(h.visits);
     })
     .catch(() => {
-      for (const id of ["polgrid", "polspark", "polsensors", "polrecent"]) {
+      for (const id of ["polgrid", "polspark", "polsensors", "polrecent", "polvisitcards", "polvisits"]) {
         document.getElementById(id).innerHTML = `<p class="muted">Could not load history.</p>`;
       }
     });

@@ -9,6 +9,8 @@ class BluciferSettings:
     auth_password_hash: str | None = None # Stored as a bcrypt hash
     # Data retention
     sightings_retention_days: int = 30    # per-sighting history is pruned past this
+    # Presence / visits
+    visit_gap_seconds: int = 900          # a new "visit" starts after a gap this long
 
 @dataclass
 class Device:

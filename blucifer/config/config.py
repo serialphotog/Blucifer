@@ -19,6 +19,12 @@ WEB_PORT: int = int(os.environ.get("BLUCIFER_WEB_PORT", "8080"))
 # (Settings -> Data Retention); this value only seeds a fresh install.
 SIGHTINGS_RETENTION_DAYS: int = int(os.environ.get("BLUCIFER_SIGHTINGS_RETENTION_DAYS", "30"))
 
+# Seed default for the visit idle-gap (seconds): the max gap between consecutive
+# sightings before a new "visit" (presence session) begins. Overridable
+# per-install in the Settings page; this value only seeds a fresh install. A
+# present device is seen ~every SCAN_INTERVAL_SECONDS; a real departure is minutes.
+VISIT_GAP_SECONDS: int = int(os.environ.get("BLUCIFER_VISIT_GAP_SECONDS", "900"))
+
 # ---- sensor node ----
 # How this sensor identifies itself to the web node (which room / box).
 SENSOR_NAME: str = os.environ.get("BLUCIFER_SENSOR_NAME") or socket.gethostname()

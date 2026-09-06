@@ -61,6 +61,7 @@ Blucifer exposes a number of environment variables that allow you to override th
 | `BLUCIFER_WEB_HOST`      | The host string for the Blucifer web UI             | `127.0.0.1`            |
 | `BLUCIFER_WEB_PORT`      | The port on which the web interface runs            | `8080`                 |
 | `BLUCIFER_SIGHTINGS_RETENTION_DAYS` | The number of days to retain sighting information (can be overridden in the web interface) | `30` |
+| `BLUCIFER_VISIT_GAP_SECONDS` | Seed default for the visit idle-gap, in seconds: a new "visit" (presence session) on a device's page starts after a sighting gap longer than this (can be overridden in the web interface) | `900` |
 | `BLUCIFER_SENSOR_NAME`   | The name of the sensor to show in the UI            | The sensor's hostname |
 | `BLUCIFER_SERVER_URL`   | The URL for the Blucifer server that the sensor sends observations to. | None |
 | `BLUCIFER_INGEST_TOKEN`  | Shared secret for POST requests to the server. | None |
