@@ -118,6 +118,7 @@ class WebServer:
         self.app.router.add_get("/api/sensors", self.sensors_list)
         self.app.router.add_post("/api/devices/group", self.devices_set_group)
         self.app.router.add_post("/api/devices/watch", self.devices_set_watch)
+        self.app.router.add_post("/api/devices/{mac}/notes", self.device_set_notes)
         self.app.router.add_post("/api/ingest", self.devices_ingest)
 
     def _sweep_sessions(self) -> None:
@@ -606,6 +607,26 @@ class WebServer:
         updated = await db.set_device_watched(macs, watched)
         logger.info(f"Watch={'on' if watched else 'off'} for {updated} device(s)")
         return web.json_response({"updated": updated})
+
+    async def device_set_notes(self, request: web.Request) -> web.Response:
+        """Saves the operator notes for one device. Body: {notes}."""
+        mac = request.match_info["mac"]
+        try:
+            body = await request.json()
+        except ValueError:
+            return web.json_response({"error": "invalid JSON"}, status=400)
+
+        notes = body.get("notes")
+        if notes is not None and not isinstance(notes, str):
+            return web.json_response(
+                {"error": "notes must be a string or null"}, status=400)
+
+        if await db.get_device(mac) is None:
+            return web.json_response({"error": "unknown device"}, status=404)
+
+        await db.set_device_notes(mac, notes)
+        logger.info(f"Notes {'cleared' if not (notes or '').strip() else 'updated'} for {mac}")
+        return web.json_response({"ok": True})
 
     async def devices_stream(self, request: web.Request) -> web.StreamResponse:
         """Server-Sent Events stream of device observations."""

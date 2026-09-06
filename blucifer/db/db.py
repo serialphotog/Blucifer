@@ -562,6 +562,23 @@ async def set_device_group(macs: list[str], group: str | None) -> int:
         await conn.commit()
         return cur.rowcount
 
+async def set_device_notes(mac: str, notes: str | None) -> bool:
+    """Stores (or clears, when notes is None/empty) the operator notes for one device.
+
+    Returns True if a device row was updated.
+    """
+    mac = (mac or "").strip()
+    if not mac:
+        return False
+    notes = (notes or "").strip() or None
+
+    async with _connect() as conn:
+        cur = await conn.execute(
+            "UPDATE devices SET notes = ? WHERE mac = ?", (notes, mac)
+        )
+        await conn.commit()
+        return cur.rowcount > 0
+
 async def set_device_watched(macs: list[str], watched: bool) -> int:
     """Sets the watched flag for the given MACs."""
     macs = [m for m in macs if m]

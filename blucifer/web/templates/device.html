@@ -41,6 +41,13 @@
   .recent th { color: var(--text-dim); font-size: .6rem; text-transform: uppercase; letter-spacing: .1em; }
   .muted { color: var(--text-dim); }
   .uuids { color: var(--text-dim); font-size: .82rem; word-break: break-all; }
+
+  .notes { margin-bottom: 1.75rem; max-width: 40rem; }
+  .notes textarea { width: 100%; min-height: 5rem; padding: .5rem .6rem; resize: vertical;
+                    font: inherit; box-sizing: border-box; }
+  .notes .noterow { display: flex; gap: .75rem; align-items: center; margin-top: .5rem; }
+  .notes button { margin: 0; padding: .42rem .95rem; }
+  .notes .saved { font-size: .78rem; color: var(--text-dim); }
 </style>
 {% endblock %}
 
@@ -73,6 +80,15 @@
       <input id="groupinput" type="text" placeholder="group name…" value="{{ device.group_name or '' }}" autocomplete="off">
       <button type="submit">Set group</button>
     </form>
+  </div>
+
+  <div class="notes">
+    <h3 class="sectitle">Operator notes</h3>
+    <textarea id="notesinput" placeholder="Notes about this device…" autocomplete="off">{{ device.notes or "" }}</textarea>
+    <div class="noterow">
+      <button id="notessave" type="button">Save notes</button>
+      <span class="saved" id="notesstatus"></span>
+    </div>
   </div>
 
   {% if device.service_uuids %}
@@ -132,6 +148,26 @@
     const g = document.getElementById("groupinput").value.trim();
     post("/api/devices/group", { macs: [MAC], group: g || null })
       .then(() => location.reload()).catch(() => {});
+  });
+
+  const notesInput = document.getElementById("notesinput");
+  const notesSave = document.getElementById("notessave");
+  const notesStatus = document.getElementById("notesstatus");
+  let savedNotes = notesInput.value;
+  const syncNotesBtn = () => { notesSave.disabled = notesInput.value === savedNotes; };
+  syncNotesBtn();
+  notesInput.addEventListener("input", () => { notesStatus.textContent = ""; syncNotesBtn(); });
+  notesSave.addEventListener("click", () => {
+    const text = notesInput.value;
+    notesSave.disabled = true;
+    notesStatus.textContent = "Saving…";
+    post(`/api/devices/${encodeURIComponent(MAC)}/notes`, { notes: text || null })
+      .then(() => {
+        savedNotes = text;
+        notesStatus.textContent = "Saved.";
+        syncNotesBtn();
+      })
+      .catch(() => { notesStatus.textContent = "Save failed."; syncNotesBtn(); });
   });
 
   function polGrid(matrix) {
