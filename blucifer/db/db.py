@@ -5,6 +5,12 @@ import logging
 
 from datetime import datetime, timezone
 
+from blucifer.analytics.correlation import (
+    CORRELATION_MIN_OCCASIONS,
+    CORRELATION_RESULT_LIMIT,
+    CORRELATION_WINDOW_SECONDS,
+    correlate_devices,
+)
 from blucifer.analytics.visits import segment_visits, visits_summary
 from blucifer.bluetooth.classifier import classify_device
 from blucifer.bluetooth.models import ScannedBluetoothDevice
@@ -61,6 +67,7 @@ _INDEXES: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_devices_group ON devices(group_name)",
     "CREATE INDEX IF NOT EXISTS idx_sightings_mac_ts ON sightings(mac, ts)",
     "CREATE INDEX IF NOT EXISTS idx_sightings_ts ON sightings(ts)",
+    "CREATE INDEX IF NOT EXISTS idx_sightings_sensor_ts ON sightings(sensor_id, ts)",
 ]
 
 # Columns added to the devices table after its first release, applied on startup
@@ -531,6 +538,82 @@ async def device_visits(
         "visits": visits,
         "summary": visits_summary(visits, gap_seconds),
     }
+
+async def device_correlations(
+    mac: str,
+    since: str | None = None,
+    window_seconds: int = CORRELATION_WINDOW_SECONDS,
+    min_occasions: int = CORRELATION_MIN_OCCASIONS,
+    limit: int = CORRELATION_RESULT_LIMIT,
+) -> dict:
+    """
+    Devices frequently seen on the same sensor(s) around the same time as
+    ``mac``, over the given window.
+
+    Restricts the fetch to sensors ``mac`` has actually been seen on (so we
+    don't scan the whole sightings table), then delegates the co-occurrence
+    math to ``blucifer.analytics.correlation.correlate_devices`` so that
+    logic stays unit-testable without a database.
+    """
+    async with _connect() as conn:
+        conn.row_factory = aiosqlite.Row
+
+        clauses = ["mac = ?", "sensor_id IS NOT NULL"]
+        params: list = [mac]
+        if since:
+            clauses.append("ts >= ?")
+            params.append(since)
+        async with conn.execute(
+            f"SELECT DISTINCT sensor_id FROM sightings WHERE {' AND '.join(clauses)}",
+            params,
+        ) as cur:
+            sensor_ids = [r["sensor_id"] for r in await cur.fetchall()]
+
+        if not sensor_ids:
+            return {
+                "target_mac": mac,
+                "target_occasions": 0,
+                "window_seconds": window_seconds,
+                "companions": [],
+            }
+
+        rows: list[dict] = []
+        for i in range(0, len(sensor_ids), _SELECT_CHUNK):
+            chunk = sensor_ids[i:i + _SELECT_CHUNK]
+            placeholders = ",".join("?" * len(chunk))
+            q = (f"SELECT sensor_id, ts, mac FROM sightings "
+                 f"WHERE sensor_id IN ({placeholders})")
+            chunk_params: list = list(chunk)
+            if since:
+                q += " AND ts >= ?"
+                chunk_params.append(since)
+            async with conn.execute(q, chunk_params) as cur:
+                async for r in cur:
+                    rows.append({"sensor_id": r["sensor_id"], "ts": r["ts"], "mac": r["mac"]})
+
+    return correlate_devices(
+        rows, mac,
+        window_seconds=window_seconds,
+        min_occasions=min_occasions,
+        limit=limit,
+    )
+
+async def get_devices(macs: list[str]) -> dict[str, Device]:
+    """Batch device lookup by MAC (chunked IN, same convention as record_devices)."""
+    if not macs:
+        return {}
+    out: dict[str, Device] = {}
+    async with _connect() as conn:
+        conn.row_factory = aiosqlite.Row
+        for i in range(0, len(macs), _SELECT_CHUNK):
+            chunk = macs[i:i + _SELECT_CHUNK]
+            placeholders = ",".join("?" * len(chunk))
+            async with conn.execute(
+                f"SELECT * FROM devices WHERE mac IN ({placeholders})", chunk
+            ) as cur:
+                async for row in cur:
+                    out[row["mac"]] = _row_to_device(row)
+    return out
 
 async def prune_sightings(older_than: str) -> int:
     """Deletes sightings with ts strictly before the given ISO-8601 timestamp."""

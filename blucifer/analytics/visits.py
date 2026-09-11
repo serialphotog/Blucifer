@@ -12,13 +12,16 @@ import statistics
 from datetime import datetime, timezone
 
 
-def _parse_ts(ts: object) -> datetime | None:
+def parse_ts(ts: object) -> datetime | None:
     """
     Parse an ISO-8601 timestamp into an aware UTC ``datetime``.
 
     Tolerates a trailing ``Z`` (``datetime.fromisoformat`` rejects it before
     Python 3.11) and naive strings (assumed UTC). Returns ``None`` for anything
     unparseable so a bad row can be skipped rather than aborting a scan.
+
+    Shared with ``blucifer.analytics.correlation`` (also pure/DB-free), which
+    needs the same tolerant parsing over the same raw ``ts`` strings.
     """
     if not isinstance(ts, str):
         return None
@@ -71,7 +74,7 @@ def segment_visits(sightings: list[dict], gap_seconds: int) -> list[dict]:
     cur: dict | None = None
 
     for row in sightings:
-        dt = _parse_ts(row.get("ts"))
+        dt = parse_ts(row.get("ts"))
         if dt is None:
             continue
 
@@ -156,8 +159,8 @@ def visits_summary(
     first_start = visits[0]["start"]
     last_end = visits[-1]["end"]
 
-    first_dt = _parse_ts(first_start)
-    last_dt = _parse_ts(last_end)
+    first_dt = parse_ts(first_start)
+    last_dt = parse_ts(last_end)
     span_seconds = (last_dt - first_dt).total_seconds() if first_dt and last_dt else 0.0
     span_days = max(1.0 / 86400, span_seconds / 86400)
 

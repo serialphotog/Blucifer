@@ -54,6 +54,8 @@
   .notes .noterow { display: flex; gap: .75rem; align-items: center; margin-top: .5rem; }
   .notes button { margin: 0; padding: .42rem .95rem; }
   .notes .saved { font-size: .78rem; color: var(--text-dim); }
+
+  .devlink:hover { color: var(--blucifer); }
 </style>
 {% endblock %}
 
@@ -118,6 +120,11 @@
   <h3 class="sectitle" style="margin:2rem 0 .6rem">Visits</h3>
   <div id="polvisitcards"><p class="muted">Loading…</p></div>
   <div id="polvisits"><p class="muted">Loading…</p></div>
+
+  <h3 class="sectitle" style="margin:2rem 0 .6rem">Companion devices</h3>
+  <p class="muted" style="margin:-.3rem 0 .6rem">Other devices frequently seen
+    on the same sensor around the same time, over the last 30 days.</p>
+  <div id="polcompanions"><p class="muted">Loading…</p></div>
 
   <h3 class="sectitle" style="margin:2rem 0 .6rem">Recent sightings</h3>
   <div id="polrecent"><p class="muted">Loading…</p></div>
@@ -264,6 +271,23 @@
            `<th>Sightings</th><th>Sensor(s)</th><th>RSSI</th></tr></thead><tbody>${rows}</tbody></table>`;
   }
 
+  function companionsTable(corr) {
+    if (!corr || !corr.companions.length) {
+      return `<p class="muted">No frequently co-located devices found in the last 30 days.</p>`;
+    }
+    const rows = corr.companions.map((c) => {
+      const d = c.device;
+      const label = esc((d && (d.friendly_name || d.vendor)) || c.mac);
+      const cls = esc((d && d.class_label) || "—");
+      const pct = Math.round(c.rate * 100);
+      const flag = c.ubiquitous ? ` <span class="tag">almost always present</span>` : "";
+      return `<tr><td><a class="devlink" href="/devices/${encodeURIComponent(c.mac)}">${label}</a>${flag}</td>` +
+             `<td>${cls}</td><td>${c.count}×</td><td>${pct}% of ${corr.target_occasions}</td></tr>`;
+    }).join("");
+    return `<table class="recent"><thead><tr><th>Device</th><th>Class</th>` +
+           `<th>Together</th><th>Rate</th></tr></thead><tbody>${rows}</tbody></table>`;
+  }
+
   fetch(`/api/devices/${encodeURIComponent(MAC)}/history`)
     .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
     .then((h) => {
@@ -273,9 +297,10 @@
       document.getElementById("polrecent").innerHTML = recentTable(h.sightings);
       document.getElementById("polvisitcards").innerHTML = visitCards(h.visits_summary);
       document.getElementById("polvisits").innerHTML = visitsTable(h.visits);
+      document.getElementById("polcompanions").innerHTML = companionsTable(h.correlations);
     })
     .catch(() => {
-      for (const id of ["polgrid", "polspark", "polsensors", "polrecent", "polvisitcards", "polvisits"]) {
+      for (const id of ["polgrid", "polspark", "polsensors", "polrecent", "polvisitcards", "polvisits", "polcompanions"]) {
         document.getElementById(id).innerHTML = `<p class="muted">Could not load history.</p>`;
       }
     });

@@ -603,6 +603,14 @@ class WebServer:
                                 db.VISIT_GAP_MIN_SECONDS, db.VISIT_GAP_MAX_SECONDS)
         visits = await db.device_visits(mac, gap_seconds=gap, since=summary_since)
 
+        correlations = await db.device_correlations(mac, since=summary_since)
+        companion_devices = await db.get_devices(
+            [c["mac"] for c in correlations["companions"]]
+        )
+        for c in correlations["companions"]:
+            d = companion_devices.get(c["mac"])
+            c["device"] = self._device_payload(d) if d else None
+
         return web.json_response({
             "mac": mac,
             "summary": summary,
@@ -611,6 +619,7 @@ class WebServer:
             "visits": visits["visits"],
             "visits_summary": visits["summary"],
             "visit_gap_seconds": gap,
+            "correlations": correlations,
         })
 
     async def devices_set_group(self, request: web.Request) -> web.Response:
